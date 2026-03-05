@@ -1,4 +1,3 @@
-# Запуск только Consumer. Kafka уже должна быть поднята в репозитории Producer (сеть spark-network).
 version: '3.8'
 
 services:
