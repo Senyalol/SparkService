@@ -1,0 +1,17 @@
+# Запуск только Consumer. Kafka уже должна быть поднята в репозитории Producer (сеть spark-network).
+version: '3.8'
+
+services:
+  consumer:
+    build: .
+    container_name: spark-transaction-consumer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: user-transactions
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    external: true
+    name: spark-network
