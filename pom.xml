@@ -87,7 +87,7 @@
                     <descriptorRefs>
                         <descriptorRef>jar-with-dependencies</descriptorRef>
                     </descriptorRefs>
-                    <finalName>${project.artifactId}-${project.version}-jar-with-dependencies</finalName>
+<!--                    <finalName>${project.artifactId}-${project.version}-jar-with-dependencies</finalName>-->
                 </configuration>
             </plugin>
         </plugins>
