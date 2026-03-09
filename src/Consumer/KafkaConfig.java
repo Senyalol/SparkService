@@ -6,7 +6,7 @@ import java.util.Properties;
 
 public class KafkaConfig {
 
-    // В контейнере передаётся KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+
     private static final String DEFAULT_BOOTSTRAP_SERVERS = "kafka:9092";
     private static final String DEFAULT_TOPIC = "user-transactions";
     private static final String DEFAULT_GROUP_ID = "spark-transaction-consumer";

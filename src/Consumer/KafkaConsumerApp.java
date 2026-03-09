@@ -22,7 +22,7 @@ public class KafkaConsumerApp {
     private static final ObjectMapper mapper = new ObjectMapper();
 
     public static void main(String[] args) {
-        log.info("Запуск Kafka Consumer приложения...");
+        log.info("Запуск Kafka Consumer приложения");
 
         String bootstrapServers = KafkaConfig.getBootstrapServersFromEnv();
         String topic = KafkaConfig.getTopicFromEnv();
@@ -43,11 +43,11 @@ public class KafkaConsumerApp {
                 for (ConsumerRecord<String, String> record : records) {
                     try {
                         Data data = mapper.readValue(record.value(), Data.class);
-                        log.info("✓ Получено: partition={}, offset={}, key={}, data={}",
+                        log.info("Получено: partition={}, offset={}, key={}, data={}",
                                 record.partition(), record.offset(), record.key(), data);
                         processTransaction(data);
                     } catch (Exception e) {
-                        log.error("✗ Ошибка обработки сообщения (partition={}, offset={}): {}",
+                        log.error("Ошибка обработки сообщения (partition={}, offset={}): {}",
                                 record.partition(), record.offset(), e.getMessage());
                     }
                 }
@@ -58,7 +58,6 @@ public class KafkaConsumerApp {
     }
 
     private static void processTransaction(Data data) {
-        // Место для бизнес-логики обработки транзакции
         log.debug("Обработка транзакции: user_id={}, type={}, sum={}",
                 data.getUser_id(), data.getType(), data.getSum());
     }
