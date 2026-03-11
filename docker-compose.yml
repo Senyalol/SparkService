@@ -7,6 +7,9 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC: user-transactions
+      KAFKA_ALERTS_TOPIC: alerts
+      KAFKA_SEGMENTS_TOPIC: user-segments
+      SPARK_MASTER: local[*]
     networks:
       - app-network
 
