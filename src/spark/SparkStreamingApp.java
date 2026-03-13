@@ -15,6 +15,8 @@ import org.apache.spark.sql.types.StructType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -31,11 +33,13 @@ public class SparkStreamingApp {
     private static final Logger log = LoggerFactory.getLogger(SparkStreamingApp.class);
     private static final long WINDOW_ANOMALY_MS = TimeUnit.MINUTES.toMillis(5);
     private static final long WINDOW_RFM_MS = TimeUnit.HOURS.toMillis(24);
-//    private static final long NEWCOMER_HOURS = 1;
-    private static final double NEWCOMER_HOURS = 5.0 / 60.0;
+    private static final double NEWCOMER_HOURS = 5.0 / 60.0; // 5 минут
     private static final double SLEEPING_R_MINUTES = 30;
 
-    private static final ObjectMapper objectMapper = new ObjectMapper();
+    // Потокобезопасный ObjectMapper
+    private static final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     public static void main(String[] args) throws StreamingQueryException, TimeoutException {
         String bootstrapServers = System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092");
@@ -43,16 +47,24 @@ public class SparkStreamingApp {
         String alertsTopic = System.getenv().getOrDefault("KAFKA_ALERTS_TOPIC", "alerts");
         String segmentsTopic = System.getenv().getOrDefault("KAFKA_SEGMENTS_TOPIC", "user-segments");
 
-        // Определяем master URL из переменной окружения или используем local[*] по умолчанию
         String master = System.getenv().getOrDefault("SPARK_MASTER", "local[*]");
 
         SparkSession spark = SparkSession.builder()
                 .appName("SparkTransaction")
                 .master(master)
                 .config("spark.sql.shuffle.partitions", "2")
+                .config("spark.sql.streaming.metricsEnabled", "true")
+                .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
                 .getOrCreate();
 
         spark.sparkContext().setLogLevel("WARN");
+
+        // Регистрируем классы для Kryo сериализации
+        spark.sparkContext().conf().registerKryoClasses(new Class[]{
+                AlertEvent.class,
+                SegmentEvent.class,
+                Row.class
+        });
 
         StructType transactionSchema = new StructType(new StructField[]{
                 new StructField("user_id", DataTypes.IntegerType, false, Metadata.empty()),
@@ -62,18 +74,23 @@ public class SparkStreamingApp {
                 new StructField("sum", DataTypes.DoubleType, false, Metadata.empty())
         });
 
-        System.out.println(">>> Spark Streaming Application Started");
-        System.out.println(">>> Kafka Bootstrap Servers: " + bootstrapServers);
-        System.out.println(">>> Input Topic: " + inputTopic);
-        System.out.println(">>> Alerts Topic: " + alertsTopic);
-        System.out.println(">>> Segments Topic: " + segmentsTopic);
+        // Логируем конфигурацию при запуске
+        log.info("=== Spark Streaming Application Started ===");
+        log.info("Kafka Bootstrap Servers: {}", bootstrapServers);
+        log.info("Input Topic: {}", inputTopic);
+        log.info("Alerts Topic: {}", alertsTopic);
+        log.info("Segments Topic: {}", segmentsTopic);
+        log.info("Master URL: {}", master);
+        log.info("Anomaly Window: {} minutes", TimeUnit.MILLISECONDS.toMinutes(WINDOW_ANOMALY_MS));
+        log.info("RFM Window: {} hours", TimeUnit.MILLISECONDS.toHours(WINDOW_RFM_MS));
+        log.info("===========================================");
 
-        // --- Источник: Kafka user-transactions ---
         Dataset<Row> rawStream = spark.readStream()
                 .format("kafka")
                 .option("kafka.bootstrap.servers", bootstrapServers)
                 .option("subscribe", inputTopic)
                 .option("startingOffsets", "latest")
+                .option("failOnDataLoss", "false")
                 .load();
 
         // Парсинг JSON из Kafka
@@ -87,13 +104,10 @@ public class SparkStreamingApp {
                 .filter(functions.col("user_id").isNotNull());
 
         // Разделяем поток для двух разных обработчиков
-        // Поток для аномалий
         Dataset<Row> transactionsForAnomalies = parsedStream.select("user_id", "type", "sum", "event_time");
-
-        // Поток для RFM
         Dataset<Row> transactionsForRFM = parsedStream.select("user_id", "type", "sum", "event_time");
 
-        // --- Аномалии: state = "ts1:amt1,ts2:amt2,..." за последние 5 мин ---
+        // --- Аномалии ---
         KeyValueGroupedDataset<Integer, Row> byUserForAnomalies = transactionsForAnomalies
                 .groupByKey(
                         (MapFunction<Row, Integer>) row -> row.getInt(0),
@@ -109,7 +123,7 @@ public class SparkStreamingApp {
                         GroupStateTimeout.ProcessingTimeTimeout()
                 );
 
-        // --- RFM: state = "last_ts|first_ts|ts1:amt1:type1,ts2:amt2:type2,..." за 24ч ---
+        // --- RFM ---
         KeyValueGroupedDataset<Integer, Row> byUserForRFM = transactionsForRFM
                 .groupByKey(
                         (MapFunction<Row, Integer>) row -> row.getInt(0),
@@ -125,19 +139,40 @@ public class SparkStreamingApp {
                         GroupStateTimeout.ProcessingTimeTimeout()
                 );
 
-        // --- Запись в Kafka (key=user_id, value=JSON) ---
-        // Для alerts
-        Dataset<Row> alertsForKafka = alerts.select(
-                functions.col("user_id").cast(DataTypes.StringType).alias("key"),
-                functions.to_json(functions.struct(functions.col("*"))).alias("value")
-        );
+        // --- Запись в Kafka с логированием ---
 
+        // Для alerts - используем явное преобразование в Dataset[Row] перед записью
+        Dataset<Row> alertsForKafka = alerts
+                .select(
+                        functions.col("user_id").cast(DataTypes.StringType).alias("key"),
+                        functions.to_json(functions.struct(functions.col("*"))).alias("value")
+                );
+
+        // Добавляем логирование через foreachBatch вместо map
         StreamingQuery queryAlerts = alertsForKafka.writeStream()
-                .format("kafka")
-                .option("kafka.bootstrap.servers", bootstrapServers)
-                .option("topic", alertsTopic)
+                .foreachBatch((Dataset<Row> batch, Long batchId) -> {
+                    if (!batch.isEmpty()) {
+                        List<Row> rows = batch.collectAsList();
+                        for (Row row : rows) {
+                            try {
+                                String key = row.getString(0);
+                                String value = row.getString(1);
+                                log.warn("🔥 ANOMALY DETECTED - Key: {}, Value: {}", key, value);
+                            } catch (Exception e) {
+                                log.error("Error logging alert", e);
+                            }
+                        }
+                    }
+
+                    // Записываем в Kafka
+                    batch.write()
+                            .format("kafka")
+                            .option("kafka.bootstrap.servers", bootstrapServers)
+                            .option("topic", alertsTopic)
+                            .save();
+                })
                 .option("checkpointLocation", "/tmp/spark-alerts-checkpoint")
-                .outputMode(OutputMode.Append())
+                .queryName("alerts-to-kafka")
                 .start();
 
         log.info("Alerts streaming started to topic: {}", alertsTopic);
@@ -147,22 +182,41 @@ public class SparkStreamingApp {
                 .format("console")
                 .outputMode(OutputMode.Append())
                 .option("truncate", "false")
+                .queryName("alerts-console")
                 .start();
 
         log.info("Alerts console sink started for debugging");
 
         // Для segments
-        Dataset<Row> segmentsForKafka = segments.select(
-                functions.col("user_id").cast(DataTypes.StringType).alias("key"),
-                functions.to_json(functions.struct(functions.col("*"))).alias("value")
-        );
+        Dataset<Row> segmentsForKafka = segments
+                .select(
+                        functions.col("user_id").cast(DataTypes.StringType).alias("key"),
+                        functions.to_json(functions.struct(functions.col("*"))).alias("value")
+                );
 
         StreamingQuery querySegments = segmentsForKafka.writeStream()
-                .format("kafka")
-                .option("kafka.bootstrap.servers", bootstrapServers)
-                .option("topic", segmentsTopic)
+                .foreachBatch((Dataset<Row> batch, Long batchId) -> {
+                    if (!batch.isEmpty()) {
+                        List<Row> rows = batch.collectAsList();
+                        for (Row row : rows) {
+                            try {
+                                String key = row.getString(0);
+                                String value = row.getString(1);
+                                log.info("📊 RFM Segment - Key: {}, Value: {}", key, value);
+                            } catch (Exception e) {
+                                log.error("Error logging segment", e);
+                            }
+                        }
+                    }
+
+                    batch.write()
+                            .format("kafka")
+                            .option("kafka.bootstrap.servers", bootstrapServers)
+                            .option("topic", segmentsTopic)
+                            .save();
+                })
                 .option("checkpointLocation", "/tmp/spark-segments-checkpoint")
-                .outputMode(OutputMode.Append())
+                .queryName("segments-to-kafka")
                 .start();
 
         log.info("Segments streaming started to topic: {}", segmentsTopic);
@@ -172,14 +226,14 @@ public class SparkStreamingApp {
                 .format("console")
                 .outputMode(OutputMode.Append())
                 .option("truncate", "false")
+                .queryName("segments-console")
                 .start();
 
         log.info("Segments console sink started for debugging");
 
-        log.info("Streaming applications started");
-        System.out.println(">>> All streams started. Waiting for data...");
+        log.info("✅ All streams started. Waiting for data...");
 
-        // Ждем завершения (в реальном приложении нужно awaitTermination для обоих)
+        // Ждем завершения
         spark.streams().awaitAnyTermination();
     }
 
@@ -188,11 +242,14 @@ public class SparkStreamingApp {
      */
     static class AnomalyDetectionFunction implements FlatMapGroupsWithStateFunction<Integer, Row, String, AlertEvent> {
 
+        private static final Logger log = LoggerFactory.getLogger(AnomalyDetectionFunction.class);
+
         @Override
         public Iterator<AlertEvent> call(Integer userId, Iterator<Row> rows, GroupState<String> state) throws Exception {
             List<AlertEvent> out = new ArrayList<>();
 
             if (state.hasTimedOut()) {
+                log.debug("State timed out for user: {}", userId);
                 state.remove();
                 return out.iterator();
             }
@@ -202,16 +259,16 @@ public class SparkStreamingApp {
             String stateStr = state.exists() ? state.get() : "";
             long now = System.currentTimeMillis();
 
-            // Парсим существующее состояние
             List<TransactionEntry> entries = parseStateEntries(stateStr, now, WINDOW_ANOMALY_MS);
 
+            int transactionCount = 0;
             while (rows.hasNext()) {
                 Row r = rows.next();
+                transactionCount++;
                 long eventTime = r.getLong(3);
                 String type = r.getString(1);
                 double sum = r.getDouble(2);
 
-                // Вычисляем среднее по существующим записям
                 double avg = calculateAverage(entries);
 
                 // Правило аномалии: Credit и сумма >= 3 * avg_check_5min
@@ -224,18 +281,16 @@ public class SparkStreamingApp {
                     alert.setAvg_check_5min(avg);
                     alert.setMessage("Credit >= 3 * avg_check_5min");
                     out.add(alert);
-
-                    // Логируем аномалию в консоль
-                    System.out.println("!!! ANOMALY DETECTED !!!");
-                    System.out.println("User: " + userId + ", Amount: " + sum + ", Avg: " + avg);
-                    System.out.println("Alert JSON: " + objectMapper.writeValueAsString(alert));
                 }
 
-                // Добавляем новую транзакцию
                 entries.add(new TransactionEntry(eventTime, sum, type));
             }
 
-            // Обновляем состояние
+            if (transactionCount > 0 && log.isDebugEnabled()) {
+                log.debug("Processed {} transactions for user {}, current window size: {}",
+                        transactionCount, userId, entries.size());
+            }
+
             state.update(serializeEntries(entries));
 
             return out.iterator();
@@ -259,7 +314,7 @@ public class SparkStreamingApp {
                             entries.add(new TransactionEntry(ts, sum, type));
                         }
                     } catch (NumberFormatException ex) {
-                        // Игнорируем некорректные записи
+                        log.error("Failed to parse state entry: {}", e, ex);
                     }
                 }
             }
@@ -291,11 +346,14 @@ public class SparkStreamingApp {
      */
     static class RFMSegmentationFunction implements FlatMapGroupsWithStateFunction<Integer, Row, String, SegmentEvent> {
 
+        private static final Logger log = LoggerFactory.getLogger(RFMSegmentationFunction.class);
+
         @Override
         public Iterator<SegmentEvent> call(Integer userId, Iterator<Row> rows, GroupState<String> state) throws Exception {
             List<SegmentEvent> out = new ArrayList<>();
 
             if (state.hasTimedOut()) {
+                log.debug("State timed out for user: {}", userId);
                 state.remove();
                 return out.iterator();
             }
@@ -305,22 +363,21 @@ public class SparkStreamingApp {
             String stateStr = state.exists() ? state.get() : "";
             long now = System.currentTimeMillis();
 
-            // Парсим существующее состояние
             RFMState rfmState = parseRFMState(stateStr, now);
 
+            int transactionCount = 0;
             while (rows.hasNext()) {
                 Row r = rows.next();
+                transactionCount++;
                 long eventTime = r.getLong(3);
                 String type = r.getString(1);
                 double sum = r.getDouble(2);
 
-                // Обновляем RFM состояние
+                RFMState oldState = cloneRFMState(rfmState); // для сравнения изменений
                 rfmState = updateRFMState(rfmState, eventTime, sum, type, now);
 
-                // Вычисляем сегмент
                 String segment = calculateSegment(rfmState, now);
 
-                // Создаем событие сегмента
                 SegmentEvent ev = new SegmentEvent();
                 ev.setUser_id(userId);
                 ev.setSegment(segment);
@@ -329,17 +386,27 @@ public class SparkStreamingApp {
                 ev.setM(rfmState.m);
                 ev.setUpdated_at(now);
                 out.add(ev);
-
-                // Логируем сегмент в консоль
-                System.out.println(">>> RFM Segment for user " + userId + ": " + segment +
-                        " (f=" + rfmState.f + ", m=" + rfmState.m + ", r=" + rfmState.rMinutes + ")");
-                System.out.println(">>> Segment JSON: " + objectMapper.writeValueAsString(ev));
             }
 
-            // Обновляем состояние
+            if (transactionCount > 0 && log.isDebugEnabled()) {
+                log.debug("Processed {} transactions for user {}, RFM state: f={}, m={:.2f}, r={:.2f}",
+                        transactionCount, userId, rfmState.f, rfmState.m, rfmState.rMinutes);
+            }
+
             state.update(serializeRFMState(rfmState));
 
             return out.iterator();
+        }
+
+        private RFMState cloneRFMState(RFMState state) {
+            RFMState clone = new RFMState();
+            clone.lastTs = state.lastTs;
+            clone.firstTs = state.firstTs;
+            clone.entries = new ArrayList<>(state.entries);
+            clone.f = state.f;
+            clone.m = state.m;
+            clone.rMinutes = state.rMinutes;
+            return clone;
         }
 
         private RFMState parseRFMState(String stateStr, long now) {
@@ -373,7 +440,7 @@ public class SparkStreamingApp {
                         }
                     }
                 } catch (NumberFormatException ex) {
-                    // Игнорируем
+                    log.error("Failed to parse RFM state: {}", stateStr, ex);
                 }
             }
             return state;
@@ -385,13 +452,9 @@ public class SparkStreamingApp {
             }
             state.lastTs = eventTime;
 
-            // Добавляем новую транзакцию
             state.entries.add(new TransactionEntry(eventTime, sum, type));
-
-            // Удаляем старые транзакции
             state.entries.removeIf(entry -> now - entry.timestamp > WINDOW_RFM_MS);
 
-            // Вычисляем метрики
             state.f = state.entries.size();
             state.m = 0;
             for (TransactionEntry e : state.entries) {
@@ -454,7 +517,7 @@ public class SparkStreamingApp {
     static class RFMState {
         long lastTs;
         long firstTs;
-        List<TransactionEntry> entries;
+        List<TransactionEntry> entries = new ArrayList<>();
         long f;
         double m;
         double rMinutes;
@@ -477,6 +540,7 @@ public class SparkStreamingApp {
 //import org.apache.spark.sql.types.StructType;
 //import org.slf4j.Logger;
 //import org.slf4j.LoggerFactory;
+//import com.fasterxml.jackson.databind.ObjectMapper;
 //
 //import java.util.ArrayList;
 //import java.util.Iterator;
@@ -493,8 +557,11 @@ public class SparkStreamingApp {
 //    private static final Logger log = LoggerFactory.getLogger(SparkStreamingApp.class);
 //    private static final long WINDOW_ANOMALY_MS = TimeUnit.MINUTES.toMillis(5);
 //    private static final long WINDOW_RFM_MS = TimeUnit.HOURS.toMillis(24);
-//    private static final long NEWCOMER_HOURS = 1;
+////    private static final long NEWCOMER_HOURS = 1;
+//    private static final double NEWCOMER_HOURS = 5.0 / 60.0;
 //    private static final double SLEEPING_R_MINUTES = 30;
+//
+//    private static final ObjectMapper objectMapper = new ObjectMapper();
 //
 //    public static void main(String[] args) throws StreamingQueryException, TimeoutException {
 //        String bootstrapServers = System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092");
@@ -521,6 +588,12 @@ public class SparkStreamingApp {
 //                new StructField("sum", DataTypes.DoubleType, false, Metadata.empty())
 //        });
 //
+//        System.out.println(">>> Spark Streaming Application Started");
+//        System.out.println(">>> Kafka Bootstrap Servers: " + bootstrapServers);
+//        System.out.println(">>> Input Topic: " + inputTopic);
+//        System.out.println(">>> Alerts Topic: " + alertsTopic);
+//        System.out.println(">>> Segments Topic: " + segmentsTopic);
+//
 //        // --- Источник: Kafka user-transactions ---
 //        Dataset<Row> rawStream = spark.readStream()
 //                .format("kafka")
@@ -540,8 +613,6 @@ public class SparkStreamingApp {
 //                .filter(functions.col("user_id").isNotNull());
 //
 //        // Разделяем поток для двух разных обработчиков
-//        //parsedStream.cache(); // Кэшируем, чтобы не читать дважды
-//
 //        // Поток для аномалий
 //        Dataset<Row> transactionsForAnomalies = parsedStream.select("user_id", "type", "sum", "event_time");
 //
@@ -581,39 +652,58 @@ public class SparkStreamingApp {
 //                );
 //
 //        // --- Запись в Kafka (key=user_id, value=JSON) ---
+//        // Для alerts
 //        Dataset<Row> alertsForKafka = alerts.select(
 //                functions.col("user_id").cast(DataTypes.StringType).alias("key"),
 //                functions.to_json(functions.struct(functions.col("*"))).alias("value")
 //        );
 //
-//            StreamingQuery queryAlerts = alertsForKafka.writeStream()
-//                    .format("kafka")
-//                    .option("kafka.bootstrap.servers", bootstrapServers)
-//                    .option("topic", alertsTopic)
-//                    .option("checkpointLocation", "/tmp/spark-alerts-checkpoint")
-//                    .outputMode(OutputMode.Append())
-//                    .start();
+//        StreamingQuery queryAlerts = alertsForKafka.writeStream()
+//                .format("kafka")
+//                .option("kafka.bootstrap.servers", bootstrapServers)
+//                .option("topic", alertsTopic)
+//                .option("checkpointLocation", "/tmp/spark-alerts-checkpoint")
+//                .outputMode(OutputMode.Append())
+//                .start();
 //
-//            log.info("Alerts streaming started to topic: {}", alertsTopic);
+//        log.info("Alerts streaming started to topic: {}", alertsTopic);
 //
+//        // Console sink для alerts (для отладки)
+//        StreamingQuery queryAlertsConsole = alerts.writeStream()
+//                .format("console")
+//                .outputMode(OutputMode.Append())
+//                .option("truncate", "false")
+//                .start();
 //
+//        log.info("Alerts console sink started for debugging");
+//
+//        // Для segments
 //        Dataset<Row> segmentsForKafka = segments.select(
 //                functions.col("user_id").cast(DataTypes.StringType).alias("key"),
 //                functions.to_json(functions.struct(functions.col("*"))).alias("value")
 //        );
 //
-//            StreamingQuery querySegments = segmentsForKafka.writeStream()
-//                    .format("kafka")
-//                    .option("kafka.bootstrap.servers", bootstrapServers)
-//                    .option("topic", segmentsTopic)
-//                    .option("checkpointLocation", "/tmp/spark-segments-checkpoint")
-//                    .outputMode(OutputMode.Append())
-//                    .start();
+//        StreamingQuery querySegments = segmentsForKafka.writeStream()
+//                .format("kafka")
+//                .option("kafka.bootstrap.servers", bootstrapServers)
+//                .option("topic", segmentsTopic)
+//                .option("checkpointLocation", "/tmp/spark-segments-checkpoint")
+//                .outputMode(OutputMode.Append())
+//                .start();
 //
-//            log.info("Segments streaming started to topic: {}", segmentsTopic);
+//        log.info("Segments streaming started to topic: {}", segmentsTopic);
 //
+//        // Console sink для segments (для отладки)
+//        StreamingQuery querySegmentsConsole = segments.writeStream()
+//                .format("console")
+//                .outputMode(OutputMode.Append())
+//                .option("truncate", "false")
+//                .start();
+//
+//        log.info("Segments console sink started for debugging");
 //
 //        log.info("Streaming applications started");
+//        System.out.println(">>> All streams started. Waiting for data...");
 //
 //        // Ждем завершения (в реальном приложении нужно awaitTermination для обоих)
 //        spark.streams().awaitAnyTermination();
@@ -660,6 +750,11 @@ public class SparkStreamingApp {
 //                    alert.setAvg_check_5min(avg);
 //                    alert.setMessage("Credit >= 3 * avg_check_5min");
 //                    out.add(alert);
+//
+//                    // Логируем аномалию в консоль
+//                    System.out.println("!!! ANOMALY DETECTED !!!");
+//                    System.out.println("User: " + userId + ", Amount: " + sum + ", Avg: " + avg);
+//                    System.out.println("Alert JSON: " + objectMapper.writeValueAsString(alert));
 //                }
 //
 //                // Добавляем новую транзакцию
@@ -760,6 +855,11 @@ public class SparkStreamingApp {
 //                ev.setM(rfmState.m);
 //                ev.setUpdated_at(now);
 //                out.add(ev);
+//
+//                // Логируем сегмент в консоль
+//                System.out.println(">>> RFM Segment for user " + userId + ": " + segment +
+//                        " (f=" + rfmState.f + ", m=" + rfmState.m + ", r=" + rfmState.rMinutes + ")");
+//                System.out.println(">>> Segment JSON: " + objectMapper.writeValueAsString(ev));
 //            }
 //
 //            // Обновляем состояние
