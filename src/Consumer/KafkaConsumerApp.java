@@ -22,7 +22,7 @@ public class KafkaConsumerApp {
     private static final ObjectMapper mapper = new ObjectMapper();
 
     public static void main(String[] args) {
-        log.info("Запуск Kafka Consumer приложения");
+        log.info("Запуск Kafka Consumer");
 
         String bootstrapServers = KafkaConfig.getBootstrapServersFromEnv();
         String topic = KafkaConfig.getTopicFromEnv();

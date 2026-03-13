@@ -31,7 +31,8 @@ public class SparkStreamingApp {
     private static final Logger log = LoggerFactory.getLogger(SparkStreamingApp.class);
     private static final long WINDOW_ANOMALY_MS = TimeUnit.MINUTES.toMillis(5);
     private static final long WINDOW_RFM_MS = TimeUnit.HOURS.toMillis(24);
-    private static final long NEWCOMER_HOURS = 1;
+//    private static final long NEWCOMER_HOURS = 1;
+    private static final double NEWCOMER_HOURS = 5.0 / 60.0;
     private static final double SLEEPING_R_MINUTES = 30;
 
     private static final ObjectMapper objectMapper = new ObjectMapper();

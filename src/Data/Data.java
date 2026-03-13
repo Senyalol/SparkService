@@ -54,4 +54,5 @@ public class Data {
         return "Data{user_id=" + user_id + ", firstname='" + firstname + "', lastname='" + lastname +
                 "', type=" + type + ", sum=" + sum + "}";
     }
+
 }
