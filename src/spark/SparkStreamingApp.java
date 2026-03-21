@@ -34,6 +34,7 @@ public class SparkStreamingApp {
     private static final long WINDOW_ANOMALY_MS = TimeUnit.MINUTES.toMillis(5);
     private static final long WINDOW_RFM_MS = TimeUnit.HOURS.toMillis(24);
     private static final double NEWCOMER_HOURS = 5.0 / 60.0; // 5 минут
+    //private static final double NEWCOMER_HOURS = 0.5 / 60.0; // 30 секунд вместо 5 минут
     private static final double SLEEPING_R_MINUTES = 30;
 
     // Потокобезопасный ObjectMapper
@@ -71,8 +72,17 @@ public class SparkStreamingApp {
                 new StructField("firstname", DataTypes.StringType, true, Metadata.empty()),
                 new StructField("lastname", DataTypes.StringType, true, Metadata.empty()),
                 new StructField("type", DataTypes.StringType, false, Metadata.empty()),
-                new StructField("sum", DataTypes.DoubleType, false, Metadata.empty())
+                new StructField("sum", DataTypes.DoubleType, false, Metadata.empty()),
+                new StructField("event_time", DataTypes.LongType, false, Metadata.empty())  // ← ДОБАВИТЬ!
         });
+
+//        StructType transactionSchema = new StructType(new StructField[]{
+//                new StructField("user_id", DataTypes.IntegerType, false, Metadata.empty()),
+//                new StructField("firstname", DataTypes.StringType, true, Metadata.empty()),
+//                new StructField("lastname", DataTypes.StringType, true, Metadata.empty()),
+//                new StructField("type", DataTypes.StringType, false, Metadata.empty()),
+//                new StructField("sum", DataTypes.DoubleType, false, Metadata.empty())
+//        });
 
         // Логируем конфигурацию при запуске
         log.info("=== Spark Streaming Application Started ===");
@@ -94,13 +104,21 @@ public class SparkStreamingApp {
                 .load();
 
         // Парсинг JSON из Kafka
+//        Dataset<Row> parsedStream = rawStream
+//                .selectExpr("CAST(value AS STRING) as json", "CAST(timestamp AS LONG) as event_time")
+//                .select(
+//                        functions.from_json(functions.col("json"), transactionSchema).as("data"),
+//                        functions.col("event_time")
+//                )
+//                .select("data.*", "event_time")
+//                .filter(functions.col("user_id").isNotNull());
+
         Dataset<Row> parsedStream = rawStream
-                .selectExpr("CAST(value AS STRING) as json", "CAST(timestamp AS LONG) as event_time")
+                .selectExpr("CAST(value AS STRING) as json")
                 .select(
-                        functions.from_json(functions.col("json"), transactionSchema).as("data"),
-                        functions.col("event_time")
+                        functions.from_json(functions.col("json"), transactionSchema).as("data")
                 )
-                .select("data.*", "event_time")
+                .select("data.*")
                 .filter(functions.col("user_id").isNotNull());
 
         // Разделяем поток для двух разных обработчиков
@@ -361,22 +379,23 @@ public class SparkStreamingApp {
             state.setTimeoutDuration(TimeUnit.HOURS.toMillis(24));
 
             String stateStr = state.exists() ? state.get() : "";
-            long now = System.currentTimeMillis();
+            //long now = System.currentTimeMillis();
 
-            RFMState rfmState = parseRFMState(stateStr, now);
+            RFMState rfmState = parseRFMState(stateStr);
 
-            int transactionCount = 0;
+            //int transactionCount = 0;
+
             while (rows.hasNext()) {
                 Row r = rows.next();
-                transactionCount++;
+                //transactionCount++;
                 long eventTime = r.getLong(3);
                 String type = r.getString(1);
                 double sum = r.getDouble(2);
 
-                RFMState oldState = cloneRFMState(rfmState); // для сравнения изменений
-                rfmState = updateRFMState(rfmState, eventTime, sum, type, now);
+               // RFMState oldState = cloneRFMState(rfmState); // для сравнения изменений
+                rfmState = updateRFMState(rfmState, eventTime, sum, type);
 
-                String segment = calculateSegment(rfmState, now);
+                String segment = calculateSegment(rfmState, eventTime, userId);
 
                 SegmentEvent ev = new SegmentEvent();
                 ev.setUser_id(userId);
@@ -384,15 +403,21 @@ public class SparkStreamingApp {
                 ev.setR_minutes(rfmState.rMinutes);
                 ev.setF(rfmState.f);
                 ev.setM(rfmState.m);
-                ev.setUpdated_at(now);
+                ev.setUpdated_at(eventTime);
                 out.add(ev);
             }
 
-            if (transactionCount > 0 && log.isDebugEnabled()) {
+//            if (transactionCount > 0 && log.isDebugEnabled()) {
+//                log.debug("Processed {} transactions for user {}, RFM state: f={}, m={:.2f}, r={:.2f}",
+//                        transactionCount, userId, rfmState.f, rfmState.m, rfmState.rMinutes);
+//            }
+
+            if (!out.isEmpty() && log.isDebugEnabled()) {
                 log.debug("Processed {} transactions for user {}, RFM state: f={}, m={:.2f}, r={:.2f}",
-                        transactionCount, userId, rfmState.f, rfmState.m, rfmState.rMinutes);
+                        out.size(), userId, rfmState.f, rfmState.m, rfmState.rMinutes);
             }
 
+//            state.update(serializeRFMState(rfmState));
             state.update(serializeRFMState(rfmState));
 
             return out.iterator();
@@ -409,7 +434,7 @@ public class SparkStreamingApp {
             return clone;
         }
 
-        private RFMState parseRFMState(String stateStr, long now) {
+        private RFMState parseRFMState(String stateStr) {
             RFMState state = new RFMState();
             state.lastTs = 0;
             state.firstTs = 0;
@@ -431,30 +456,60 @@ public class SparkStreamingApp {
                             String[] p = e.split(":");
                             if (p.length >= 3) {
                                 long ts = Long.parseLong(p[0]);
-                                if (now - ts <= WINDOW_RFM_MS) {
-                                    double sum = Double.parseDouble(p[1]);
-                                    String type = p[2];
-                                    state.entries.add(new TransactionEntry(ts, sum, type));
-                                }
+                                double sum = Double.parseDouble(p[1]);
+                                String type = p[2];
+                                state.entries.add(new TransactionEntry(ts, sum, type));
                             }
                         }
                     }
-                } catch (NumberFormatException ex) {
+                }
+                catch (NumberFormatException ex) {
                     log.error("Failed to parse RFM state: {}", stateStr, ex);
                 }
             }
             return state;
         }
 
-        private RFMState updateRFMState(RFMState state, long eventTime, double sum, String type, long now) {
+//        private RFMState updateRFMState(RFMState state, long eventTime, double sum, String type) {
+//
+//            if (state.firstTs == 0) {
+//                state.firstTs = eventTime;
+//            }
+//
+//            state.lastTs = eventTime;
+//
+//            state.entries.add(new TransactionEntry(eventTime, sum, type));
+//            state.entries.removeIf(entry -> eventTime - entry.timestamp > WINDOW_RFM_MS);
+//
+//            state.f = state.entries.size();
+//            state.m = 0;
+//            for (TransactionEntry e : state.entries) {
+//                if ("Deposit".equalsIgnoreCase(e.type)) {
+//                    state.m += e.sum;
+//                }
+//            }
+//
+//            state.rMinutes = (eventTime - state.lastTs) / 60000.0;
+//
+//            return state;
+//        }
+
+        private RFMState updateRFMState(RFMState state, long eventTime, double sum, String type) {
+            // Сохраняем первую транзакцию навсегда!
             if (state.firstTs == 0) {
-                state.firstTs = eventTime;
+                state.firstTs = eventTime;  // устанавливаем только один раз
             }
+
+            // Обновляем последнюю транзакцию всегда
             state.lastTs = eventTime;
 
+            // Добавляем транзакцию в список
             state.entries.add(new TransactionEntry(eventTime, sum, type));
-            state.entries.removeIf(entry -> now - entry.timestamp > WINDOW_RFM_MS);
 
+            // Оставляем только последние 24 часа
+            state.entries.removeIf(entry -> eventTime - entry.timestamp > WINDOW_RFM_MS);
+
+            // Пересчитываем метрики
             state.f = state.entries.size();
             state.m = 0;
             for (TransactionEntry e : state.entries) {
@@ -462,13 +517,21 @@ public class SparkStreamingApp {
                     state.m += e.sum;
                 }
             }
-            state.rMinutes = (now - state.lastTs) / 60000.0;
+            state.rMinutes = (eventTime - state.lastTs) / 60000.0;
 
             return state;
         }
 
-        private String calculateSegment(RFMState state, long now) {
-            double firstHoursAgo = (now - state.firstTs) / 3600000.0;
+        private String calculateSegment(RFMState state, long currentTime, int userId) {
+
+            double firstHoursAgo = (currentTime - state.firstTs) / 3600000.0;
+
+            System.out.println("🔥 DEBUG: user=" + userId  +
+                    ", firstTs=" + state.firstTs +
+                    ", currentTime=" + currentTime +
+                    ", diffSec=" + (currentTime - state.firstTs) / 1000 +
+                    ", firstHoursAgo=" + firstHoursAgo +
+                    ", threshold=" + NEWCOMER_HOURS);
 
             if (firstHoursAgo < NEWCOMER_HOURS) {
                 return "Новичок";
@@ -481,6 +544,7 @@ public class SparkStreamingApp {
             } else {
                 return "Стандартный";
             }
+
         }
 
         private String serializeRFMState(RFMState state) {
