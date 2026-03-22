@@ -1,6 +1,18 @@
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis-data:/data
+    command: redis-server --appendonly yes --appendfsync everysec
+    networks:
+      - app-network
+    restart: unless-stopped
+
   consumer:
     build: .
     container_name: spark-transaction-consumer
@@ -10,8 +22,12 @@ services:
       KAFKA_ALERTS_TOPIC: alerts
       KAFKA_SEGMENTS_TOPIC: user-segments
       SPARK_MASTER: local[*]
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     networks:
       - app-network
+    depends_on:
+      - redis
 
 networks:
   app-network:

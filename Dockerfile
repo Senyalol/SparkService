@@ -1,4 +1,3 @@
-# Этап сборки
 FROM maven:3.9.9-eclipse-temurin-11 AS builder
 
 WORKDIR /app
@@ -8,20 +7,16 @@ COPY src ./src
 
 RUN mvn clean package -DskipTests
 
-# Этап выполнения
 FROM apache/spark:3.5.3
 
 USER root
 
 WORKDIR /app
 
-# Копируем fat-JAR (именно тот, который 73 МБ)
 COPY --from=builder /app/target/SparkTransaction-1.0-SNAPSHOT.jar /app/app.jar
 
-# Проверяем, что файл скопировался
 RUN ls -la /app/app.jar || (echo "JAR file not found!" && exit 1)
 
-# Копируем скрипт запуска
 COPY run.sh /app/run.sh
 RUN chmod +x /app/run.sh
 

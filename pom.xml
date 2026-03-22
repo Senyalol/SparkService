@@ -68,11 +68,11 @@
         </dependency>
 
         <!-- Jackson Module for Scala -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.module</groupId>
-            <artifactId>jackson-module-scala_${scala.binary.version}</artifactId>
-            <version>${jackson.version}</version>
-        </dependency>
+<!--c-->        <dependency><!--/c-->
+<!--c-->            <groupId>com.fasterxml.jackson.module</groupId><!--/c-->
+<!--c-->            <artifactId>jackson-module-scala_${scala.binary.version}</artifactId><!--/c-->
+<!--c-->            <version>${jackson.version}</version><!--/c-->
+<!--c-->        </dependency><!--/c-->
 
         <!-- SLF4J API -->
         <dependency>
@@ -87,6 +87,15 @@
             <artifactId>logback-classic</artifactId>
             <version>1.4.11</version>
         </dependency>
+
+        <!-- Редис БД -->
+        <dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+            <version>4.4.0</version>
+        </dependency>
+        <!-- Редис БД -->
+
     </dependencies>
 
     <build>

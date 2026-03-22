@@ -366,6 +366,17 @@ public class SparkStreamingApp {
 
         private static final Logger log = LoggerFactory.getLogger(RFMSegmentationFunction.class);
 
+        // transient — не сериализуем
+        private transient redis.clients.jedis.Jedis jedis;
+        private transient ObjectMapper mapper;
+
+        private final ObjectMapper createMapper() {
+            ObjectMapper m = new ObjectMapper();
+            m.registerModule(new JavaTimeModule());
+            m.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            return m;
+        }
+
         @Override
         public Iterator<SegmentEvent> call(Integer userId, Iterator<Row> rows, GroupState<String> state) throws Exception {
             List<SegmentEvent> out = new ArrayList<>();
@@ -378,23 +389,44 @@ public class SparkStreamingApp {
 
             state.setTimeoutDuration(TimeUnit.HOURS.toMillis(24));
 
-            String stateStr = state.exists() ? state.get() : "";
-            //long now = System.currentTimeMillis();
+            // Инициализация Redis клиента (lazy, внутри executor'а)
+            if (jedis == null) {
+                String redisHost = System.getenv().getOrDefault("REDIS_HOST", "redis");
+                int redisPort = Integer.parseInt(System.getenv().getOrDefault("REDIS_PORT", "6379"));
+                jedis = new redis.clients.jedis.Jedis(redisHost, redisPort);
+                log.info("Connected to Redis at {}:{}", redisHost, redisPort);
+            }
 
-            RFMState rfmState = parseRFMState(stateStr);
+            // Инициализация ObjectMapper (lazy)
+            if (mapper == null) {
+                mapper = createMapper();
+            }
 
-            //int transactionCount = 0;
+            // 2. Загружаем состояние из Redis
+            String redisKey = "rfm:" + userId;
+            String savedStateJson = jedis.get(redisKey);
 
+            RFMState rfmState;
+            if (savedStateJson != null && !savedStateJson.isEmpty()) {
+                rfmState = mapper.readValue(savedStateJson, RFMState.class);
+                log.debug("Loaded user {} from Redis: f={}, m={}", userId, rfmState.f, rfmState.m);
+            } else if (state.exists()) {
+                String stateStr = state.get();
+                rfmState = parseRFMState(stateStr);
+                log.debug("Loaded user {} from Spark state", userId);
+            } else {
+                rfmState = new RFMState();
+                log.debug("New user: {}", userId);
+            }
+
+            // 3. Обрабатываем новые транзакции
             while (rows.hasNext()) {
                 Row r = rows.next();
-                //transactionCount++;
                 long eventTime = r.getLong(3);
                 String type = r.getString(1);
                 double sum = r.getDouble(2);
 
-               // RFMState oldState = cloneRFMState(rfmState); // для сравнения изменений
                 rfmState = updateRFMState(rfmState, eventTime, sum, type);
-
                 String segment = calculateSegment(rfmState, eventTime, userId);
 
                 SegmentEvent ev = new SegmentEvent();
@@ -407,38 +439,25 @@ public class SparkStreamingApp {
                 out.add(ev);
             }
 
-//            if (transactionCount > 0 && log.isDebugEnabled()) {
-//                log.debug("Processed {} transactions for user {}, RFM state: f={}, m={:.2f}, r={:.2f}",
-//                        transactionCount, userId, rfmState.f, rfmState.m, rfmState.rMinutes);
-//            }
-
-            if (!out.isEmpty() && log.isDebugEnabled()) {
-                log.debug("Processed {} transactions for user {}, RFM state: f={}, m={:.2f}, r={:.2f}",
-                        out.size(), userId, rfmState.f, rfmState.m, rfmState.rMinutes);
+            // 4. Сохраняем в Redis
+            if (!out.isEmpty()) {
+                String newStateJson = mapper.writeValueAsString(rfmState);
+                jedis.set(redisKey, newStateJson);
+                jedis.expire(redisKey, 604800);
+                log.debug("Saved user {} to Redis: f={}, m={}", userId, rfmState.f, rfmState.m);
             }
 
-//            state.update(serializeRFMState(rfmState));
+            // 5. Сохраняем в Spark state
             state.update(serializeRFMState(rfmState));
 
             return out.iterator();
         }
 
-        private RFMState cloneRFMState(RFMState state) {
-            RFMState clone = new RFMState();
-            clone.lastTs = state.lastTs;
-            clone.firstTs = state.firstTs;
-            clone.entries = new ArrayList<>(state.entries);
-            clone.f = state.f;
-            clone.m = state.m;
-            clone.rMinutes = state.rMinutes;
-            return clone;
-        }
-
         private RFMState parseRFMState(String stateStr) {
             RFMState state = new RFMState();
-            state.lastTs = 0;
-            state.firstTs = 0;
-            state.entries = new ArrayList<>();
+            state.setLastTs(0);
+            state.setFirstTs(0);
+            state.setEntries(new ArrayList<>());
 
             if (stateStr == null || stateStr.isEmpty()) {
                 return state;
@@ -447,8 +466,8 @@ public class SparkStreamingApp {
             String[] parts = stateStr.split("\\|", 3);
             if (parts.length >= 2) {
                 try {
-                    state.lastTs = Long.parseLong(parts[0]);
-                    state.firstTs = Long.parseLong(parts[1]);
+                    state.setLastTs(Long.parseLong(parts[0]));
+                    state.setFirstTs(Long.parseLong(parts[1]));
 
                     if (parts.length == 3 && !parts[2].isEmpty()) {
                         for (String e : parts[2].split(",")) {
@@ -458,46 +477,21 @@ public class SparkStreamingApp {
                                 long ts = Long.parseLong(p[0]);
                                 double sum = Double.parseDouble(p[1]);
                                 String type = p[2];
-                                state.entries.add(new TransactionEntry(ts, sum, type));
+                                state.getEntries().add(new TransactionEntry(ts, sum, type));
                             }
                         }
                     }
-                }
-                catch (NumberFormatException ex) {
+                } catch (NumberFormatException ex) {
                     log.error("Failed to parse RFM state: {}", stateStr, ex);
                 }
             }
             return state;
         }
 
-//        private RFMState updateRFMState(RFMState state, long eventTime, double sum, String type) {
-//
-//            if (state.firstTs == 0) {
-//                state.firstTs = eventTime;
-//            }
-//
-//            state.lastTs = eventTime;
-//
-//            state.entries.add(new TransactionEntry(eventTime, sum, type));
-//            state.entries.removeIf(entry -> eventTime - entry.timestamp > WINDOW_RFM_MS);
-//
-//            state.f = state.entries.size();
-//            state.m = 0;
-//            for (TransactionEntry e : state.entries) {
-//                if ("Deposit".equalsIgnoreCase(e.type)) {
-//                    state.m += e.sum;
-//                }
-//            }
-//
-//            state.rMinutes = (eventTime - state.lastTs) / 60000.0;
-//
-//            return state;
-//        }
-
         private RFMState updateRFMState(RFMState state, long eventTime, double sum, String type) {
             // Сохраняем первую транзакцию навсегда!
             if (state.firstTs == 0) {
-                state.firstTs = eventTime;  // устанавливаем только один раз
+                state.firstTs = eventTime;
             }
 
             // Обновляем последнюю транзакцию всегда
@@ -523,10 +517,9 @@ public class SparkStreamingApp {
         }
 
         private String calculateSegment(RFMState state, long currentTime, int userId) {
-
             double firstHoursAgo = (currentTime - state.firstTs) / 3600000.0;
 
-            System.out.println("🔥 DEBUG: user=" + userId  +
+            System.out.println("🔥 DEBUG: user=" + userId +
                     ", firstTs=" + state.firstTs +
                     ", currentTime=" + currentTime +
                     ", diffSec=" + (currentTime - state.firstTs) / 1000 +
@@ -544,47 +537,86 @@ public class SparkStreamingApp {
             } else {
                 return "Стандартный";
             }
-
         }
 
         private String serializeRFMState(RFMState state) {
             StringBuilder sb = new StringBuilder();
-            sb.append(state.lastTs).append("|").append(state.firstTs).append("|");
+            sb.append(state.getLastTs()).append("|").append(state.getFirstTs()).append("|");
 
-            for (int i = 0; i < state.entries.size(); i++) {
+            for (int i = 0; i < state.getEntries().size(); i++) {
                 if (i > 0) sb.append(",");
-                TransactionEntry e = state.entries.get(i);
-                sb.append(e.timestamp).append(":").append(e.sum).append(":").append(e.type);
+                TransactionEntry e = state.getEntries().get(i);
+                sb.append(e.getTimestamp()).append(":").append(e.getSum()).append(":").append(e.getType());
             }
             return sb.toString();
         }
     }
-
+    /**
+     * Вспомогательный класс для хранения транзакции
+     */
     /**
      * Вспомогательный класс для хранения транзакции
      */
     static class TransactionEntry {
-        long timestamp;
-        double sum;
-        String type;
+        private long timestamp;
+        private double sum;
+        private String type;
 
-        TransactionEntry(long timestamp, double sum, String type) {
+        // Пустой конструктор для Jackson
+        public TransactionEntry() {}
+
+        public TransactionEntry(long timestamp, double sum, String type) {
             this.timestamp = timestamp;
             this.sum = sum;
             this.type = type;
         }
+
+        // Геттеры и сеттеры
+        public long getTimestamp() { return timestamp; }
+        public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
+
+        public double getSum() { return sum; }
+        public void setSum(double sum) { this.sum = sum; }
+
+        public String getType() { return type; }
+        public void setType(String type) { this.type = type; }
     }
 
     /**
      * Вспомогательный класс для RFM состояния
      */
+    /**
+     * Вспомогательный класс для RFM состояния
+     */
     static class RFMState {
-        long lastTs;
-        long firstTs;
-        List<TransactionEntry> entries = new ArrayList<>();
-        long f;
-        double m;
-        double rMinutes;
+        private long lastTs;
+        private long firstTs;
+        private List<TransactionEntry> entries = new ArrayList<>();
+        private long f;
+        private double m;
+        private double rMinutes;
+
+        // Пустой конструктор для Jackson
+        public RFMState() {}
+
+        // Геттеры (обязательны для Jackson)
+        public long getLastTs() { return lastTs; }
+        public void setLastTs(long lastTs) { this.lastTs = lastTs; }
+
+        public long getFirstTs() { return firstTs; }
+        public void setFirstTs(long firstTs) { this.firstTs = firstTs; }
+
+        public List<TransactionEntry> getEntries() { return entries; }
+        public void setEntries(List<TransactionEntry> entries) { this.entries = entries; }
+
+        public long getF() { return f; }
+        public void setF(long f) { this.f = f; }
+
+        public double getM() { return m; }
+        public void setM(double m) { this.m = m; }
+
+        public double getRMinutes() { return rMinutes; }
+        public void setRMinutes(double rMinutes) { this.rMinutes = rMinutes; }
     }
 }
 
