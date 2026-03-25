@@ -6,15 +6,12 @@
         </encoder>
     </appender>
 
-    <!-- Настройки для Spark и Kafka -->
     <logger name="org.apache.spark" level="WARN"/>
     <logger name="org.apache.kafka" level="WARN"/>
     <logger name="org.apache.hadoop" level="WARN"/>
 
-    <!-- Наше приложение -->
     <logger name="spark" level="INFO"/>
 
-    <!-- Для детального логирования аномалий (раскомментировать при необходимости) -->
     <!-- <logger name="spark.SparkStreamingApp$AnomalyDetectionFunction" level="DEBUG"/> -->
     <!-- <logger name="spark.SparkStreamingApp$RFMSegmentationFunction" level="DEBUG"/> -->
 
@@ -22,21 +19,3 @@
         <appender-ref ref="CONSOLE"/>
     </root>
 </configuration>
-
-<!--c--><?xml version="1.0" encoding="UTF-8"?><!--/c-->
-<!--c--><configuration><!--/c-->
-<!--c-->    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender"><!--/c-->
-<!--c-->        <encoder><!--/c-->
-<!--c-->            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern><!--/c-->
-<!--c-->        </encoder><!--/c-->
-<!--c-->    </appender><!--/c-->
-<!--c--><!--/c-->
-<!--c-->    <logger name="org.apache.spark" level="WARN"/><!--/c-->
-<!--c-->    <logger name="org.apache.kafka" level="WARN"/><!--/c-->
-<!--c-->    <logger name="org.apache.hadoop" level="WARN"/><!--/c-->
-<!--c-->    <logger name="spark" level="INFO"/><!--/c-->
-<!--c--><!--/c-->
-<!--c-->    <root level="INFO"><!--/c-->
-<!--c-->        <appender-ref ref="CONSOLE"/><!--/c-->
-<!--c-->    </root><!--/c-->
-<!--c--></configuration><!--/c-->

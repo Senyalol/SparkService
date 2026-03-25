@@ -46,7 +46,7 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- Spark SQL Kafka Integration - включаем в JAR -->
+        <!-- Spark SQL Kafka Integration -->
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-sql-kafka-0-10_${scala.binary.version}</artifactId>
@@ -66,13 +66,6 @@
             <artifactId>jackson-databind</artifactId>
             <version>${jackson.version}</version>
         </dependency>
-
-        <!-- Jackson Module for Scala -->
-<!--c-->        <dependency><!--/c-->
-<!--c-->            <groupId>com.fasterxml.jackson.module</groupId><!--/c-->
-<!--c-->            <artifactId>jackson-module-scala_${scala.binary.version}</artifactId><!--/c-->
-<!--c-->            <version>${jackson.version}</version><!--/c-->
-<!--c-->        </dependency><!--/c-->
 
         <!-- SLF4J API -->
         <dependency>
