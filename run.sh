@@ -1,5 +1,5 @@
-#!/bin/bash
-echo "🧹 Cleaning up old Spark temporary files..."
+#!/bin/sh
+echo "Cleaning up old Spark temporary files..."
 rm -rf /tmp/blockmgr-* 2>/dev/null
 rm -rf /tmp/spark-* 2>/dev/null
 rm -rf /tmp/temporary-* 2>/dev/null
