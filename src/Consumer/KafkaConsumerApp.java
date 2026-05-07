@@ -1,6 +1,6 @@
 package Consumer;
 
-import Data.Data;
+import data.Data;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;

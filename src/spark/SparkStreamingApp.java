@@ -42,6 +42,7 @@ public class SparkStreamingApp {
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     public static void main(String[] args) throws StreamingQueryException, TimeoutException {
+
         String bootstrapServers = System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092");
         String inputTopic = System.getenv().getOrDefault("KAFKA_TOPIC", "user-transactions");
         String alertsTopic = System.getenv().getOrDefault("KAFKA_ALERTS_TOPIC", "alerts");
@@ -195,7 +196,7 @@ public class SparkStreamingApp {
                             try {
                                 String key = row.getString(0);
                                 String value = row.getString(1);
-                                log.info("📊 RFM Segment - Key: {}, Value: {}", key, value);
+                                log.info("RFM Segment - Key: {}, Value: {}", key, value);
                             } catch (Exception e) {
                                 log.error("Error logging segment", e);
                             }
