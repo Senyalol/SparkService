@@ -37,6 +37,7 @@ public class SparkStreamingApp {
     private static final double NEWCOMER_HOURS = 5.0 / 60.0; // 5 минут
     //private static final double NEWCOMER_HOURS = 0.5 / 60.0; // 30 секунд
     private static final double SLEEPING_R_MINUTES = 30;
+    private static final String ANOMALY_STATE_SEP = "||";
 
     private static final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())
@@ -246,6 +247,35 @@ public class SparkStreamingApp {
         return target;
     }
 
+    static double clampM(double m) {
+        return Math.max(0, m);
+    }
+
+    static void purgeWindow(List<TransactionEntry> entries, long curr, long windowMs) {
+        entries.removeIf(entry -> curr - entry.timestamp > windowMs);
+    }
+
+    /** Баланс в окне RFM: Deposit +, Credit −; M не ниже 0. */
+    static double segmentBalanceFromEntries(List<TransactionEntry> entries) {
+        double balance = 0;
+        for (TransactionEntry e : entries) {
+            String t = e.getType();
+            if (t == null) {
+                continue;
+            }
+            if ("Deposit".equalsIgnoreCase(t)) {
+                balance += e.getSum();
+            } else if ("Credit".equalsIgnoreCase(t)) {
+                balance -= e.getSum();
+            }
+        }
+        return clampM(balance);
+    }
+
+    static boolean isNegativeMCredit(double currentM, String type, double sum) {
+        return "Credit".equalsIgnoreCase(type) && sum > currentM;
+    }
+
     /**
      * Функция для детекции аномалий
      */
@@ -268,7 +298,9 @@ public class SparkStreamingApp {
             String stateStr = state.exists() ? state.get() : "";
             long now = System.currentTimeMillis();
 
-            List<TransactionEntry> entries = parseStateEntries(stateStr, now, WINDOW_ANOMALY_MS);
+            List<TransactionEntry> avgEntries = new ArrayList<>();
+            List<TransactionEntry> mEntries = new ArrayList<>();
+            loadAnomalyState(stateStr, now, avgEntries, mEntries);
 
             int transactionCount = 0;
             while (rows.hasNext()) {
@@ -277,10 +309,25 @@ public class SparkStreamingApp {
                 long eventTime = r.getLong(3);
                 String type = r.getString(1);
                 double sum = r.getDouble(2);
+                long curr = eventTime > 0 ? eventTime : now;
 
-                double avg = calculateAverage(entries);
+                purgeWindow(mEntries, curr, WINDOW_RFM_MS);
+                double currentM = segmentBalanceFromEntries(mEntries);
 
-                // Правило аномалии: Credit и сумма >= 3 * avg_check_5min
+                if (isNegativeMCredit(currentM, type, sum)) {
+                    AlertEvent alert = new AlertEvent();
+                    alert.setUser_id(userId);
+                    alert.setEvent_time(eventTime);
+                    alert.setType(type);
+                    alert.setSum(sum);
+                    alert.setAvg_check_5min(currentM);
+                    alert.setMessage(AnomalyType.NEGATIVE_M.name());
+                    out.add(alert);
+                    continue;
+                }
+
+                double avg = calculateAverage(avgEntries);
+
                 if ("Credit".equalsIgnoreCase(type) && avg > 0 && sum >= 3 * avg) {
                     AlertEvent alert = new AlertEvent();
                     alert.setUser_id(userId);
@@ -288,19 +335,21 @@ public class SparkStreamingApp {
                     alert.setType(type);
                     alert.setSum(sum);
                     alert.setAvg_check_5min(avg);
-                    alert.setMessage("Credit >= 3 * avg_check_5min");
+                    alert.setMessage(AnomalyType.BIGGER_THEN_AVG_CHECK.name());
                     out.add(alert);
                 }
 
-                entries.add(new TransactionEntry(eventTime, sum, type));
+                long entryTs = eventTime > 0 ? eventTime : now;
+                mEntries.add(new TransactionEntry(entryTs, sum, type));
+                avgEntries.add(new TransactionEntry(entryTs, sum, type));
             }
 
             if (transactionCount > 0 && log.isDebugEnabled()) {
-                log.debug("Processed {} transactions for user {}, current window size: {}",
-                        transactionCount, userId, entries.size());
+                log.debug("Processed {} transactions for user {}, avg window={}, m window={}",
+                        transactionCount, userId, avgEntries.size(), mEntries.size());
             }
 
-            state.update(serializeEntries(entries));
+            state.update(serializeAnomalyState(avgEntries, mEntries));
 
             return out.iterator();
         }
@@ -339,6 +388,44 @@ public class SparkStreamingApp {
             return total / entries.size();
         }
 
+        private void loadAnomalyState(String stateStr, long now,
+                                      List<TransactionEntry> avgEntries, List<TransactionEntry> mEntries) {
+            if (stateStr == null || stateStr.isEmpty()) {
+                return;
+            }
+            int sep = stateStr.indexOf(ANOMALY_STATE_SEP);
+            if (sep >= 0) {
+                avgEntries.addAll(parseStateEntries(stateStr.substring(0, sep), now, WINDOW_ANOMALY_MS));
+                mEntries.addAll(parseEntriesCsv(stateStr.substring(sep + ANOMALY_STATE_SEP.length())));
+            } else {
+                avgEntries.addAll(parseStateEntries(stateStr, now, WINDOW_ANOMALY_MS));
+            }
+        }
+
+        private List<TransactionEntry> parseEntriesCsv(String csv) {
+            List<TransactionEntry> entries = new ArrayList<>();
+            if (csv == null || csv.isEmpty()) {
+                return entries;
+            }
+            for (String e : csv.split(",")) {
+                if (e.isEmpty()) {
+                    continue;
+                }
+                String[] parts = e.split(":");
+                if (parts.length >= 3) {
+                    try {
+                        long ts = Long.parseLong(parts[0]);
+                        double sum = Double.parseDouble(parts[1]);
+                        String type = parts[2];
+                        entries.add(new TransactionEntry(ts, sum, type));
+                    } catch (NumberFormatException ex) {
+                        log.error("Failed to parse M state entry: {}", e, ex);
+                    }
+                }
+            }
+            return entries;
+        }
+
         private String serializeEntries(List<TransactionEntry> entries) {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < entries.size(); i++) {
@@ -347,6 +434,20 @@ public class SparkStreamingApp {
                 sb.append(e.timestamp).append(":").append(e.sum).append(":").append(e.type);
             }
             return sb.toString();
+        }
+
+        private String serializeAnomalyState(List<TransactionEntry> avgEntries, List<TransactionEntry> mEntries) {
+            return serializeEntries(avgEntries) + ANOMALY_STATE_SEP + serializeEntries(mEntries);
+        }
+    }
+
+    static class RfmUpdateResult {
+        final RFMState state;
+        final boolean applied;
+
+        RfmUpdateResult(RFMState state, boolean applied) {
+            this.state = state;
+            this.applied = applied;
         }
     }
 
@@ -403,7 +504,12 @@ public class SparkStreamingApp {
                 String type = r.getString(1);
                 double sum = r.getDouble(2);
 
-                rfmState = updateRFMState(rfmState, eventTime, sum, type);
+                RfmUpdateResult update = updateRFMState(rfmState, eventTime, sum, type);
+                if (!update.applied) {
+                    log.debug("Rejected Credit for user {}: sum={}, current M={}", userId, sum, rfmState.m);
+                    continue;
+                }
+                rfmState = update.state;
                 String segment = calculateSegment(rfmState, eventTime, userId);
 
                 SegmentEvent ev = new SegmentEvent();
@@ -510,23 +616,6 @@ public class SparkStreamingApp {
             s.setM(segmentBalanceFromEntries(s.getEntries()));
         }
 
-        /** Баланс сегмента в окне: Deposit +, Credit −. */
-        private static double segmentBalanceFromEntries(List<TransactionEntry> entries) {
-            double balance = 0;
-            for (TransactionEntry e : entries) {
-                String t = e.getType();
-                if (t == null) {
-                    continue;
-                }
-                if ("Deposit".equalsIgnoreCase(t)) {
-                    balance += e.getSum();
-                } else if ("Credit".equalsIgnoreCase(t)) {
-                    balance -= e.getSum();
-                }
-            }
-            return balance;
-        }
-
         private RFMState parseRFMState(String stateStr) {
             RFMState state = new RFMState();
             state.setLastTs(0);
@@ -579,9 +668,18 @@ public class SparkStreamingApp {
             }
         }
 
-        private RFMState updateRFMState(RFMState state, long eventTime, double sum, String type) {
+        private RfmUpdateResult updateRFMState(RFMState state, long eventTime, double sum, String type) {
             long wallNow = System.currentTimeMillis();
             long curr = eventTime > 0 ? eventTime : wallNow;
+
+            purgeWindow(state.entries, curr, WINDOW_RFM_MS);
+            double currentM = segmentBalanceFromEntries(state.entries);
+            state.m = currentM;
+            state.f = state.entries.size();
+
+            if (isNegativeMCredit(currentM, type, sum)) {
+                return new RfmUpdateResult(state, false);
+            }
 
             if (state.firstTs == 0) {
                 state.firstTs = curr;
@@ -608,14 +706,13 @@ public class SparkStreamingApp {
             state.lastTs = curr;
             state.lastWallMs = wallNow;
 
-            state.entries.add(new TransactionEntry(eventTime > 0 ? eventTime : wallNow, sum, type));
-
-            state.entries.removeIf(entry -> curr - entry.timestamp > WINDOW_RFM_MS);
+            state.entries.add(new TransactionEntry(curr, sum, type));
+            purgeWindow(state.entries, curr, WINDOW_RFM_MS);
 
             state.f = state.entries.size();
             state.m = segmentBalanceFromEntries(state.entries);
 
-            return state;
+            return new RfmUpdateResult(state, true);
         }
 
         private String calculateSegment(RFMState state, long currentTime, int userId) {
