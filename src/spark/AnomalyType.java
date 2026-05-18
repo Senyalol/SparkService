@@ -1,8 +1,7 @@
 package spark;
 
 public enum AnomalyType {
-    BIGGER_THEN_AVG_CHECK, // Транзакция больше чем средний чек в 3 раза за 5 минут
-    NEGATIVE_M, //Если M <0 и поступило списание средств
-    FREQUENT_TRANSACTIONS, //Только для Credit
-    BIGGEST_AND_FREQUENT_CREDIT //Частые и большие списования
+    BIGGER_THEN_AVG_CHECK, // Credit/Deposit >= 3 * avg за 5 мин → alerts + user-segments (если Credit <= M)
+    NEGATIVE_M, // Credit > M → только alerts
+    BIGGEST_AND_FREQUENT_CREDIT // Частые крупные Credit/Deposit за 5 мин → alerts + user-segments (если Credit <= M)
 }

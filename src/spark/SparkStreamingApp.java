@@ -328,16 +328,28 @@ public class SparkStreamingApp {
 
                 double avg = calculateAverage(avgEntries);
 
-                if ("Credit".equalsIgnoreCase(type) && avg > 0 && sum >= 3 * avg) {
+                if (avg > 0 && sum >= 3 * avg) {
                     AlertEvent alert = new AlertEvent();
                     alert.setUser_id(userId);
                     alert.setEvent_time(eventTime);
-                    alert.setType(type);
+                    alert.setType(type);  // Здесь будет либо "Credit", либо "Deposit"
                     alert.setSum(sum);
                     alert.setAvg_check_5min(avg);
                     alert.setMessage(AnomalyType.BIGGER_THEN_AVG_CHECK.name());
                     out.add(alert);
                 }
+//                double avg = calculateAverage(avgEntries);
+//
+//                if ("Credit".equalsIgnoreCase(type) && avg > 0 && sum >= 3 * avg) {
+//                    AlertEvent alert = new AlertEvent();
+//                    alert.setUser_id(userId);
+//                    alert.setEvent_time(eventTime);
+//                    alert.setType(type);
+//                    alert.setSum(sum);
+//                    alert.setAvg_check_5min(avg);
+//                    alert.setMessage(AnomalyType.BIGGER_THEN_AVG_CHECK.name());
+//                    out.add(alert);
+//                }
 
                 long entryTs = eventTime > 0 ? eventTime : now;
                 mEntries.add(new TransactionEntry(entryTs, sum, type));
