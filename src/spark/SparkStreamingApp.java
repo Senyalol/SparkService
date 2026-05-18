@@ -33,7 +33,7 @@ public class SparkStreamingApp {
 
     private static final Logger log = LoggerFactory.getLogger(SparkStreamingApp.class);
     private static final long WINDOW_ANOMALY_MS = TimeUnit.MINUTES.toMillis(5);
-    private static final long WINDOW_RFM_MS = TimeUnit.HOURS.toMillis(24);
+    private static final long WINDOW_RFM_MS = TimeUnit.MINUTES.toMillis(5);
     private static final double NEWCOMER_HOURS = 5.0 / 60.0; // 5 минут
     //private static final double NEWCOMER_HOURS = 0.5 / 60.0; // 30 секунд
     private static final double SLEEPING_R_MINUTES = 30;
@@ -83,7 +83,7 @@ public class SparkStreamingApp {
         log.info("Segments Topic: {}", segmentsTopic);
         log.info("Master URL: {}", master);
         log.info("Anomaly Window: {} minutes", TimeUnit.MILLISECONDS.toMinutes(WINDOW_ANOMALY_MS));
-        log.info("RFM Window: {} hours", TimeUnit.MILLISECONDS.toHours(WINDOW_RFM_MS));
+        log.info("RFM Window: {} minutes", TimeUnit.MILLISECONDS.toMinutes(WINDOW_RFM_MS));
         log.info("===========================================");
 
         Dataset<Row> rawStream = spark.readStream()
@@ -507,12 +507,24 @@ public class SparkStreamingApp {
 
         private static void recomputeAggregates(RFMState s) {
             s.setF(s.getEntries().size());
-            s.setM(0);
-            for (TransactionEntry e : s.getEntries()) {
-                if ("Deposit".equalsIgnoreCase(e.getType())) {
-                    s.setM(s.getM() + e.getSum());
+            s.setM(segmentBalanceFromEntries(s.getEntries()));
+        }
+
+        /** Баланс сегмента в окне: Deposit +, Credit −. */
+        private static double segmentBalanceFromEntries(List<TransactionEntry> entries) {
+            double balance = 0;
+            for (TransactionEntry e : entries) {
+                String t = e.getType();
+                if (t == null) {
+                    continue;
+                }
+                if ("Deposit".equalsIgnoreCase(t)) {
+                    balance += e.getSum();
+                } else if ("Credit".equalsIgnoreCase(t)) {
+                    balance -= e.getSum();
                 }
             }
+            return balance;
         }
 
         private RFMState parseRFMState(String stateStr) {
@@ -601,12 +613,7 @@ public class SparkStreamingApp {
             state.entries.removeIf(entry -> curr - entry.timestamp > WINDOW_RFM_MS);
 
             state.f = state.entries.size();
-            state.m = 0;
-            for (TransactionEntry e : state.entries) {
-                if ("Deposit".equalsIgnoreCase(e.type)) {
-                    state.m += e.sum;
-                }
-            }
+            state.m = segmentBalanceFromEntries(state.entries);
 
             return state;
         }
