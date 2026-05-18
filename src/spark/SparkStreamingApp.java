@@ -39,6 +39,12 @@ public class SparkStreamingApp {
     private static final double SLEEPING_R_MINUTES = 30;
     private static final String ANOMALY_STATE_SEP = "||";
 
+    //Anomaly
+    private static final long STRUCTURING_WINDOW_MS = TimeUnit.MINUTES.toMillis(10);
+    private static final double SMALL_TRANSACTION_THRESHOLD = 500.0;
+    private static final int MIN_STRUCTURING_COUNT = 10;
+    private static final double MIN_STRUCTURING_TOTAL = 3000.0;          // Минимальная общая сумма
+
     private static final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -276,6 +282,32 @@ public class SparkStreamingApp {
         return "Credit".equalsIgnoreCase(type) && sum > currentM;
     }
 
+    private static boolean isStructuringSmallTransactions(
+            List<TransactionEntry> entries,
+            double currentSum,
+            long currentTime
+    ) {
+        long smallCount = 0;
+        double smallTotal = 0;
+
+        for (TransactionEntry e : entries) {
+            if (currentTime - e.getTimestamp() <= STRUCTURING_WINDOW_MS) {
+                if (e.getSum() <= SMALL_TRANSACTION_THRESHOLD) {
+                    smallCount++;
+                    smallTotal += e.getSum();
+                }
+            }
+        }
+
+        if (currentSum <= SMALL_TRANSACTION_THRESHOLD) {
+            smallCount++;
+            smallTotal += currentSum;
+        }
+
+        return smallCount >= MIN_STRUCTURING_COUNT &&
+                smallTotal >= MIN_STRUCTURING_TOTAL;
+    }
+
     /**
      * Функция для детекции аномалий
      */
@@ -350,6 +382,17 @@ public class SparkStreamingApp {
 //                    alert.setMessage(AnomalyType.BIGGER_THEN_AVG_CHECK.name());
 //                    out.add(alert);
 //                }
+
+                if (isStructuringSmallTransactions(mEntries, sum, curr)) {
+                    AlertEvent alert = new AlertEvent();
+                    alert.setUser_id(userId);
+                    alert.setEvent_time(eventTime);
+                    alert.setType(type);
+                    alert.setSum(sum);
+                    alert.setAvg_check_5min(0);
+                    alert.setMessage(AnomalyType.STRUCTURING_SMALL_TRANSACTIONS.name());
+                    out.add(alert);
+                }
 
                 long entryTs = eventTime > 0 ? eventTime : now;
                 mEntries.add(new TransactionEntry(entryTs, sum, type));
@@ -844,4 +887,7 @@ public class SparkStreamingApp {
         public double getRMinutes() { return rMinutes; }
         public void setRMinutes(double rMinutes) { this.rMinutes = rMinutes; }
     }
+
+
+
 }
