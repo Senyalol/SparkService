@@ -45,6 +45,12 @@ public class SparkStreamingApp {
     private static final int MIN_STRUCTURING_COUNT = 10;
     private static final double MIN_STRUCTURING_TOTAL = 3000.0;          // Минимальная общая сумма
 
+    // Параметры для EXCESSIVE_REVERSAL_PATTERN
+    private static final long REVERSAL_WINDOW_MS = TimeUnit.MINUTES.toMillis(5);     // Окно 5 минут
+    private static final double REVERSAL_THRESHOLD = 0.9;                              // Кредит >= 90% от депозита
+    private static final long MAX_TIME_BETWEEN_MS = TimeUnit.MINUTES.toMillis(1);     // Максимум 1 минута между операциями
+    private static final int MIN_REVERSAL_COUNT = 2;                                   // Минимум 2 таких паттерна
+
     private static final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -308,6 +314,40 @@ public class SparkStreamingApp {
                 smallTotal >= MIN_STRUCTURING_TOTAL;
     }
 
+    private static boolean isExcessiveReversalPattern(
+            List<TransactionEntry> entries,
+            String currentType,
+            double currentSum,
+            long currentTime
+    ) {
+        // Проверяем только Credit транзакции (вывод средств)
+        if (!"Credit".equalsIgnoreCase(currentType)) {
+            return false;
+        }
+
+        int reversalCount = 0;
+
+        // Проходим по всем транзакциям в окне
+        for (TransactionEntry e : entries) {
+            // Ищем Deposit (внесение средств)
+            if ("Deposit".equalsIgnoreCase(e.getType())) {
+                // Проверяем, была ли транзакция в пределах окна
+                if (currentTime - e.getTimestamp() <= REVERSAL_WINDOW_MS) {
+                    // Проверяем, что кредит составляет >= REVERSAL_THRESHOLD от депозита
+                    boolean amountMatch = currentSum >= e.getSum() * REVERSAL_THRESHOLD;
+                    // Проверяем, что время между операциями не превышает MAX_TIME_BETWEEN_MS
+                    boolean timeMatch = (currentTime - e.getTimestamp()) <= MAX_TIME_BETWEEN_MS;
+
+                    if (amountMatch && timeMatch) {
+                        reversalCount++;
+                    }
+                }
+            }
+        }
+
+        return reversalCount >= MIN_REVERSAL_COUNT;
+    }
+
     /**
      * Функция для детекции аномалий
      */
@@ -391,6 +431,18 @@ public class SparkStreamingApp {
                     alert.setSum(sum);
                     alert.setAvg_check_5min(0);
                     alert.setMessage(AnomalyType.STRUCTURING_SMALL_TRANSACTIONS.name());
+                    out.add(alert);
+                }
+
+                // Проверка на EXCESSIVE_REVERSAL_PATTERN
+                if (isExcessiveReversalPattern(mEntries, type, sum, curr)) {
+                    AlertEvent alert = new AlertEvent();
+                    alert.setUser_id(userId);
+                    alert.setEvent_time(eventTime);
+                    alert.setType(type);
+                    alert.setSum(sum);
+                    alert.setAvg_check_5min(0);
+                    alert.setMessage(AnomalyType.EXCESSIVE_REVERSAL_PATTERN.name());
                     out.add(alert);
                 }
 
