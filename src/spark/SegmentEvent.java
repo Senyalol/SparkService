@@ -11,6 +11,7 @@ public class SegmentEvent implements Serializable {
     private double r_minutes;
     private long f;
     private double m;
+    private double m_total;
     private long updated_at;
 
     public int getUser_id() { return user_id; }
@@ -25,4 +26,6 @@ public class SegmentEvent implements Serializable {
     public void setM(double m) { this.m = m; }
     public long getUpdated_at() { return updated_at; }
     public void setUpdated_at(long updated_at) { this.updated_at = updated_at; }
+    public double getM_total() { return m_total; }
+    public void setM_total(double m_total) { this.m_total = m_total; }
 }

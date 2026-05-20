@@ -613,7 +613,7 @@ public class SparkStreamingApp {
 
                 RfmUpdateResult update = updateRFMState(rfmState, eventTime, sum, type);
                 if (!update.applied) {
-                    log.debug("Rejected Credit for user {}: sum={}, current M={}", userId, sum, rfmState.m);
+                    log.debug("Rejected Credit for user {}: sum={}, current M={}", userId, sum, rfmState.getMWindow());
                     continue;
                 }
                 rfmState = update.state;
@@ -624,7 +624,7 @@ public class SparkStreamingApp {
                 ev.setSegment(segment);
                 ev.setR_minutes(rfmState.rMinutes);
                 ev.setF(rfmState.f);
-                ev.setM(rfmState.m);
+                ev.setM(rfmState.getMWindow());
                 ev.setUpdated_at(eventTime);
                 out.add(ev);
             }
@@ -633,7 +633,7 @@ public class SparkStreamingApp {
                 String newStateJson = mapper.writeValueAsString(rfmState);
                 jedis.set(redisKey, newStateJson);
                 jedis.expire(redisKey, 604800);
-                log.debug("Saved user {} to Redis: f={}, m={}", userId, rfmState.f, rfmState.m);
+                log.debug("Saved user {} to Redis: f={}, m={}", userId, rfmState.f, rfmState.getMWindow());
             }
 
             state.update(serializeRFMState(rfmState));
@@ -651,8 +651,15 @@ public class SparkStreamingApp {
                 fromRedis = mapper.readValue(savedStateJson, RFMState.class);
                 ensureEntriesNotNull(fromRedis);
                 reconcileLastTsFromEntries(fromRedis);
-                log.debug("Loaded user {} from Redis: lastTs={}, f={}, m={}",
-                        userId, fromRedis.getLastTs(), fromRedis.getF(), fromRedis.getM());
+
+                // Если в Redis нет mTotal, инициализируем из оконного M
+                if (fromRedis.getMTotal() == 0 && fromRedis.getMWindow() > 0) {
+                    fromRedis.setMTotal(fromRedis.getMWindow());
+                }
+
+                log.debug("Loaded user {} from Redis: lastTs={}, f={}, mTotal={}, mWindow={}",
+                        userId, fromRedis.getLastTs(), fromRedis.getF(),
+                        fromRedis.getMTotal(), fromRedis.getMWindow());
             }
 
             RFMState fromSpark = null;
@@ -669,6 +676,12 @@ public class SparkStreamingApp {
                 rfmState.setLastTs(Math.max(fromRedis.getLastTs(), fromSpark.getLastTs()));
                 rfmState.setLastWallMs(Math.max(fromRedis.getLastWallMs(), fromSpark.getLastWallMs()));
                 rfmState.setFirstTs(mergeFirstTs(fromRedis.getFirstTs(), fromSpark.getFirstTs()));
+
+                // M_total берём из Redis (более надёжный)
+                if (fromSpark.getMTotal() > fromRedis.getMTotal()) {
+                    rfmState.setMTotal(fromSpark.getMTotal());
+                }
+
                 if (fromSpark.getEntries().size() > fromRedis.getEntries().size()) {
                     rfmState.setEntries(new ArrayList<>(fromSpark.getEntries()));
                 }
@@ -720,7 +733,8 @@ public class SparkStreamingApp {
 
         private static void recomputeAggregates(RFMState s) {
             s.setF(s.getEntries().size());
-            s.setM(segmentBalanceFromEntries(s.getEntries()));
+            s.setMWindow(segmentBalanceFromEntries(s.getEntries()));  // ← должно быть setMWindow
+            // M_total НЕ пересчитываем из entries! Он хранится отдельно
         }
 
         private RFMState parseRFMState(String stateStr) {
@@ -728,22 +742,28 @@ public class SparkStreamingApp {
             state.setLastTs(0);
             state.setFirstTs(0);
             state.setLastWallMs(0);
+            state.setMTotal(0);
+            state.setMWindow(0);
             state.setEntries(new ArrayList<>());
 
             if (stateStr == null || stateStr.isEmpty()) {
                 return state;
             }
 
-            String[] parts = stateStr.split("\\|", 4);
-            if (parts.length < 3) {
+            String[] parts = stateStr.split("\\|", 6);  // ← увеличили до 6
+            if (parts.length < 5) {
                 return state;
             }
             try {
                 state.setLastTs(Long.parseLong(parts[0]));
                 state.setFirstTs(Long.parseLong(parts[1]));
-                if (parts.length == 4) {
+                if (parts.length >= 4) {
                     state.setLastWallMs(Long.parseLong(parts[2]));
-                    parseRFMEntries(parts[3], state);
+                    state.setMTotal(Double.parseDouble(parts[3]));   // ← НОВОЕ
+                    state.setMWindow(Double.parseDouble(parts[4]));  // ← НОВОЕ
+                    if (parts.length >= 6) {
+                        parseRFMEntries(parts[5], state);
+                    }
                 } else {
                     parseRFMEntries(parts[2], state);
                 }
@@ -752,6 +772,36 @@ public class SparkStreamingApp {
             }
             return state;
         }
+
+//        private RFMState parseRFMState(String stateStr) {
+//            RFMState state = new RFMState();
+//            state.setLastTs(0);
+//            state.setFirstTs(0);
+//            state.setLastWallMs(0);
+//            state.setEntries(new ArrayList<>());
+//
+//            if (stateStr == null || stateStr.isEmpty()) {
+//                return state;
+//            }
+//
+//            String[] parts = stateStr.split("\\|", 4);
+//            if (parts.length < 3) {
+//                return state;
+//            }
+//            try {
+//                state.setLastTs(Long.parseLong(parts[0]));
+//                state.setFirstTs(Long.parseLong(parts[1]));
+//                if (parts.length == 4) {
+//                    state.setLastWallMs(Long.parseLong(parts[2]));
+//                    parseRFMEntries(parts[3], state);
+//                } else {
+//                    parseRFMEntries(parts[2], state);
+//                }
+//            } catch (NumberFormatException ex) {
+//                log.error("Failed to parse RFM state: {}", stateStr, ex);
+//            }
+//            return state;
+//        }
 
         private void parseRFMEntries(String csv, RFMState state) {
             if (csv == null || csv.isEmpty()) {
@@ -780,16 +830,29 @@ public class SparkStreamingApp {
             long curr = eventTime > 0 ? eventTime : wallNow;
 
             purgeWindow(state.entries, curr, WINDOW_RFM_MS);
-            double currentM = segmentBalanceFromEntries(state.entries);
-            state.m = currentM;
-            state.f = state.entries.size();
+            double currentMWindow = segmentBalanceFromEntries(state.entries);
+            state.setMWindow(currentMWindow);
+            state.setF(state.entries.size());
+//            purgeWindow(state.entries, curr, WINDOW_RFM_MS);
+//            double currentM = segmentBalanceFromEntries(state.entries);
+//            state.m = currentM;
+//            state.f = state.entries.size();
 
-            if (isNegativeMCredit(currentM, type, sum)) {
+            if (isNegativeMCredit(currentMWindow, type, sum)) {
                 return new RfmUpdateResult(state, false);
             }
 
-            if (state.firstTs == 0) {
-                state.firstTs = curr;
+            // 3. Обновляем M_TOTAL (накопительный баланс, не очищается)
+            double currentMTotal = state.getMTotal();
+            if ("Deposit".equalsIgnoreCase(type)) {
+                currentMTotal += sum;
+            } else if ("Credit".equalsIgnoreCase(type)) {
+                currentMTotal -= sum;
+            }
+            state.setMTotal(Math.max(0, currentMTotal));  // Не может быть ниже 0
+
+            if (state.getFirstTs() == 0) {
+                state.setFirstTs(curr);
             }
 
             long prevLast = state.lastTs;
@@ -813,43 +876,73 @@ public class SparkStreamingApp {
             state.lastTs = curr;
             state.lastWallMs = wallNow;
 
+            // 5. Добавляем транзакцию в окно
             state.entries.add(new TransactionEntry(curr, sum, type));
             purgeWindow(state.entries, curr, WINDOW_RFM_MS);
 
-            state.f = state.entries.size();
-            state.m = segmentBalanceFromEntries(state.entries);
+            // 6. Пересчитываем оконные метрики
+            state.setF(state.entries.size());
+            state.setMWindow(segmentBalanceFromEntries(state.entries));
 
             return new RfmUpdateResult(state, true);
         }
 
         private String calculateSegment(RFMState state, long currentTime, int userId) {
-            double firstHoursAgo = (currentTime - state.firstTs) / 3600000.0;
+            double firstHoursAgo = (currentTime - state.getFirstTs()) / 3600000.0;
 
             System.out.println("DEBUG: user=" + userId +
-                    ", firstTs=" + state.firstTs +
+                    ", firstTs=" + state.getFirstTs() +
                     ", currentTime=" + currentTime +
-                    ", diffSec=" + (currentTime - state.firstTs) / 1000 +
-                    ", firstHoursAgo=" + firstHoursAgo +
-                    ", threshold=" + NEWCOMER_HOURS);
+                    ", firstHoursAgo=" + firstHoursAgo);
 
             if (firstHoursAgo < NEWCOMER_HOURS) {
                 return "Новичок";
-            } else if (state.m > 10000 && state.f > 5) {
+            }
+            // ← ВАЖНО: используем M_TOTAL, а не M_WINDOW!
+            else if (state.getMTotal() > 10000 && state.getF() > 5) {
                 return "VIP";
-            } else if (state.m > 1000 && state.f > 1) {
+            }
+            else if (state.getMTotal() > 1000 && state.getF() > 1) {
                 return "Активный";
-            } else if (state.rMinutes > SLEEPING_R_MINUTES) {
+            }
+            else if (state.getRMinutes() > SLEEPING_R_MINUTES) {
                 return "Спящий";
-            } else {
+            }
+            else {
                 return "Стандартный";
             }
         }
+
+//        private String calculateSegment(RFMState state, long currentTime, int userId) {
+//            double firstHoursAgo = (currentTime - state.firstTs) / 3600000.0;
+//
+//            System.out.println("DEBUG: user=" + userId +
+//                    ", firstTs=" + state.firstTs +
+//                    ", currentTime=" + currentTime +
+//                    ", diffSec=" + (currentTime - state.firstTs) / 1000 +
+//                    ", firstHoursAgo=" + firstHoursAgo +
+//                    ", threshold=" + NEWCOMER_HOURS);
+//
+//            if (firstHoursAgo < NEWCOMER_HOURS) {
+//                return "Новичок";
+//            } else if (state.m > 10000 && state.f > 5) {
+//                return "VIP";
+//            } else if (state.m > 1000 && state.f > 1) {
+//                return "Активный";
+//            } else if (state.rMinutes > SLEEPING_R_MINUTES) {
+//                return "Спящий";
+//            } else {
+//                return "Стандартный";
+//            }
+//        }
 
         private String serializeRFMState(RFMState state) {
             StringBuilder sb = new StringBuilder();
             sb.append(state.getLastTs()).append("|")
                     .append(state.getFirstTs()).append("|")
-                    .append(state.getLastWallMs()).append("|");
+                    .append(state.getLastWallMs()).append("|")
+                    .append(state.getMTotal()).append("|")  // ← НОВОЕ поле
+                    .append(state.getMWindow()).append("|"); // ← НОВОЕ поле
 
             for (int i = 0; i < state.getEntries().size(); i++) {
                 if (i > 0) {
@@ -860,6 +953,7 @@ public class SparkStreamingApp {
             }
             return sb.toString();
         }
+
     }
     /**
      * Вспомогательный класс для хранения транзакции
@@ -911,8 +1005,10 @@ public class SparkStreamingApp {
         private List<TransactionEntry> entries = new ArrayList<>();
         @JsonProperty("f")
         private long f;
-        @JsonProperty("m")
-        private double m;
+        @JsonProperty("mWindow")
+        private double mWindow;
+        @JsonProperty("mTotal")       // ← НОВОЕ поле! Баланс за всё время
+        private double mTotal;
         @JsonProperty("rMinutes")
         private double rMinutes;
 
@@ -933,8 +1029,14 @@ public class SparkStreamingApp {
         public long getF() { return f; }
         public void setF(long f) { this.f = f; }
 
-        public double getM() { return m; }
-        public void setM(double m) { this.m = m; }
+        public double getMWindow() { return mWindow; }
+        public void setMWindow(double mWindow) { this.mWindow = mWindow; }
+
+        public double getMTotal() { return mTotal; }
+        public void setMTotal(double mTotal) { this.mTotal = mTotal; }
+
+        public double getM() { return mWindow; }
+        public void setM(double m) { this.mWindow = m; }
 
         public double getRMinutes() { return rMinutes; }
         public void setRMinutes(double rMinutes) { this.rMinutes = rMinutes; }
