@@ -850,7 +850,7 @@ public class SparkStreamingApp {
                     deltaEvent = curr - prevLast;
                 }
                 if (deltaEvent > 0) {
-                    state.rMinutes = deltaEvent / 60000.0;
+                    state.rMinutes = deltaEvent / 60.0; //60000.0;
                 } else {
                     long wallDelta = prevWall > 0 ? (wallNow - prevWall) : 0;
                     state.rMinutes = wallDelta > 0 ? wallDelta / 60000.0 : 0;
