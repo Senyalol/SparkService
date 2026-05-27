@@ -808,7 +808,30 @@ public class SparkStreamingApp {
 
         private RfmUpdateResult updateRFMState(RFMState state, long eventTime, double sum, String type) {
             long wallNow = System.currentTimeMillis();
-            long curr = eventTime > 0 ? eventTime : wallNow;
+
+            // ========== НОРМАЛИЗАЦИЯ ВРЕМЕНИ ==========
+            long curr;
+            if (eventTime > 0) {
+                if (eventTime < 10_000_000_000L) {
+                    curr = eventTime * 1000;
+                    log.debug("Converted eventTime from seconds to ms: {} -> {}", eventTime, curr);
+                } else {
+                    curr = eventTime;
+                }
+            } else {
+                curr = wallNow;
+                log.debug("Using wallNow as ms: {}", curr);
+            }
+
+            // ========== ДИАГНОСТИКА ==========
+            System.out.println("=== DIAGNOSTIC RMINUTES ===");
+            System.out.println("eventTime raw: " + eventTime);
+            System.out.println("curr: " + curr);
+            System.out.println("state.lastTs: " + state.lastTs);
+            System.out.println("state.rMinutes before: " + state.rMinutes);
+            System.out.println("===========================");
+
+            // ========== ОСНОВНАЯ ЛОГИКА ==========
 
             // 1. Обновляем оконные метрики (F_window и M_window)
             purgeWindow(state.entries, curr, WINDOW_RFM_MS);
@@ -816,12 +839,12 @@ public class SparkStreamingApp {
             state.setMWindow(currentMWindow);
             state.setFWindow(state.entries.size());
 
-
+            // 2. Проверка на отрицательный M
             if (isNegativeMCredit(currentMWindow, type, sum)) {
                 return new RfmUpdateResult(state, false);
             }
 
-            // 3. Обновляем M_TOTAL (накопительный баланс, не очищается)
+            // 3. Обновляем M_TOTAL и F_TOTAL
             double currentMTotal = state.getMTotal();
             long currentFTotal = state.getFTotal();
 
@@ -830,46 +853,120 @@ public class SparkStreamingApp {
             } else if ("Credit".equalsIgnoreCase(type)) {
                 currentMTotal -= sum;
             }
-            currentFTotal++;  // Каждая транзакция увеличивает F_total
+            currentFTotal++;
 
             state.setMTotal(Math.max(0, currentMTotal));
             state.setFTotal(currentFTotal);
 
+            // 4. Устанавливаем firstTs (первая транзакция)
             if (state.getFirstTs() == 0) {
                 state.setFirstTs(curr);
             }
 
-            long prevLast = state.lastTs;
-            long prevWall = state.lastWallMs;
+            // ========== РАСЧЁТ R_MINUTES ==========
+            double newRMinutes = state.rMinutes;
 
-            if (prevLast == 0 && prevWall == 0) {
-                state.rMinutes = 0;
+            if (state.lastTs == 0) {
+                newRMinutes = 0;
+                log.debug("First transaction, rMinutes = 0");
             } else {
-                long deltaEvent = 0;
-                if (prevLast > 0 && curr >= prevLast) {
-                    deltaEvent = curr - prevLast;
-                }
+                long deltaEvent = curr - state.lastTs;
+
                 if (deltaEvent > 0) {
-                    state.rMinutes = deltaEvent / 60.0; //60000.0;
+                    newRMinutes = deltaEvent / 60000.0;
+                    log.info("RMinutes: deltaEvent={}ms ({} min), rMinutes={}",
+                            deltaEvent, deltaEvent / 60000.0, newRMinutes);
+                } else if (deltaEvent == 0) {
+                    log.debug("Same timestamp, keeping previous rMinutes={}", newRMinutes);
                 } else {
-                    long wallDelta = prevWall > 0 ? (wallNow - prevWall) : 0;
-                    state.rMinutes = wallDelta > 0 ? wallDelta / 60000.0 : 0;
+                    log.warn("Time went backwards! curr={}, lastTs={}", curr, state.lastTs);
+                    newRMinutes = 0;
                 }
             }
 
-            state.lastTs = curr;
+            state.rMinutes = newRMinutes;
+
+            // 5. Обновляем lastTs (ВСЕГДА)
+            if (curr > state.lastTs || state.lastTs == 0) {
+                state.lastTs = curr;
+            }
             state.lastWallMs = wallNow;
 
-            // 5. Добавляем транзакцию в окно
+            // 6. Добавляем транзакцию в окно
             state.entries.add(new TransactionEntry(curr, sum, type));
             purgeWindow(state.entries, curr, WINDOW_RFM_MS);
 
-            // 6. Пересчитываем оконные метрики
+            // 7. Пересчитываем оконные метрики
             state.setFWindow(state.entries.size());
             state.setMWindow(segmentBalanceFromEntries(state.entries));
 
             return new RfmUpdateResult(state, true);
         }
+
+//        private RfmUpdateResult updateRFMState(RFMState state, long eventTime, double sum, String type) {
+//            long wallNow = System.currentTimeMillis();
+//            long curr = eventTime > 0 ? eventTime : wallNow;
+//
+//            // 1. Обновляем оконные метрики (F_window и M_window)
+//            purgeWindow(state.entries, curr, WINDOW_RFM_MS);
+//            double currentMWindow = segmentBalanceFromEntries(state.entries);
+//            state.setMWindow(currentMWindow);
+//            state.setFWindow(state.entries.size());
+//
+//
+//            if (isNegativeMCredit(currentMWindow, type, sum)) {
+//                return new RfmUpdateResult(state, false);
+//            }
+//
+//            // 3. Обновляем M_TOTAL (накопительный баланс, не очищается)
+//            double currentMTotal = state.getMTotal();
+//            long currentFTotal = state.getFTotal();
+//
+//            if ("Deposit".equalsIgnoreCase(type)) {
+//                currentMTotal += sum;
+//            } else if ("Credit".equalsIgnoreCase(type)) {
+//                currentMTotal -= sum;
+//            }
+//            currentFTotal++;  // Каждая транзакция увеличивает F_total
+//
+//            state.setMTotal(Math.max(0, currentMTotal));
+//            state.setFTotal(currentFTotal);
+//
+//            if (state.getFirstTs() == 0) {
+//                state.setFirstTs(curr);
+//            }
+//
+//            long prevLast = state.lastTs;
+//            long prevWall = state.lastWallMs;
+//
+//            if (prevLast == 0 && prevWall == 0) {
+//                state.rMinutes = 0;
+//            } else {
+//                long deltaEvent = 0;
+//                if (prevLast > 0 && curr >= prevLast) {
+//                    deltaEvent = curr - prevLast;
+//                }
+//                if (deltaEvent > 0) {
+//                    state.rMinutes = deltaEvent / 60.0; //60000.0;
+//                } else {
+//                    long wallDelta = prevWall > 0 ? (wallNow - prevWall) : 0;
+//                    state.rMinutes = wallDelta > 0 ? wallDelta / 60000.0 : 0;
+//                }
+//            }
+//
+//            state.lastTs = curr;
+//            state.lastWallMs = wallNow;
+//
+//            // 5. Добавляем транзакцию в окно
+//            state.entries.add(new TransactionEntry(curr, sum, type));
+//            purgeWindow(state.entries, curr, WINDOW_RFM_MS);
+//
+//            // 6. Пересчитываем оконные метрики
+//            state.setFWindow(state.entries.size());
+//            state.setMWindow(segmentBalanceFromEntries(state.entries));
+//
+//            return new RfmUpdateResult(state, true);
+//        }
 
         private String calculateSegment(RFMState state, long currentTime, int userId) {
             double firstHoursAgo = (currentTime - state.getFirstTs()) / 3600000.0;
