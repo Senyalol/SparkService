@@ -259,16 +259,16 @@ public class SparkStreamingApp {
         return target;
     }
 
-    static double clampM(double m) {
+    public static double clampM(double m) {
         return Math.max(0, m);
     }
 
-    static void purgeWindow(List<TransactionEntry> entries, long curr, long windowMs) {
+    public static void purgeWindow(List<TransactionEntry> entries, long curr, long windowMs) {
         entries.removeIf(entry -> curr - entry.timestamp > windowMs);
     }
 
     /** Баланс в окне RFM: Deposit +, Credit −; M не ниже 0. */
-    static double segmentBalanceFromEntries(List<TransactionEntry> entries) {
+    public static double segmentBalanceFromEntries(List<TransactionEntry> entries) {
         double balance = 0;
         for (TransactionEntry e : entries) {
             String t = e.getType();
@@ -284,7 +284,7 @@ public class SparkStreamingApp {
         return clampM(balance);
     }
 
-    static boolean isNegativeMCredit(double currentM, String type, double sum) {
+    public static boolean isNegativeMCredit(double currentM, String type, double sum) {
         return "Credit".equalsIgnoreCase(type) && sum > currentM;
     }
 
@@ -1022,7 +1022,7 @@ public class SparkStreamingApp {
     /**
      * Вспомогательный класс для хранения транзакции
      */
-    static class TransactionEntry {
+    public static class TransactionEntry {
         @JsonProperty("timestamp")
         private long timestamp;
         @JsonProperty("sum")
@@ -1054,7 +1054,7 @@ public class SparkStreamingApp {
     /**
      * Вспомогательный класс для RFM состояния
      */
-    static class RFMState {
+    public static class RFMState {
         @JsonProperty("lastTs")
         private long lastTs;
         @JsonProperty("firstTs")
