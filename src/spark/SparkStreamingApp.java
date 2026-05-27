@@ -36,7 +36,7 @@ public class SparkStreamingApp {
     private static final long WINDOW_RFM_MS = TimeUnit.MINUTES.toMillis(5);
     private static final double NEWCOMER_HOURS = 5.0 / 60.0; // 5 минут
     //private static final double NEWCOMER_HOURS = 0.5 / 60.0; // 30 секунд
-    private static final double SLEEPING_R_MINUTES = 30;
+    private static final double SLEEPING_R_MINUTES = 5; //30;
     private static final String ANOMALY_STATE_SEP = "||";
 
     //Anomaly
