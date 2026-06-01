@@ -182,7 +182,7 @@ class RFMSegmentationLogicTest {
             return "VIP";
         } else if (state.getMTotal() > 1000 && state.getFTotal() > 1) {
             return "Активный";
-        } else if (state.getRMinutes() > 30) {  // ← Используем реальный порог
+        } else if (state.getRMinutes() > 30) {
             return "Спящий";
         } else {
             return "Стандартный";

@@ -25,10 +25,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Spark Structured Streaming: чтение транзакций из Kafka,
- * детекция аномалий (Credit >= 3 * avg_check_5min) и RFM-сегментация.
- */
+
 public class SparkStreamingApp {
 
     private static final Logger log = LoggerFactory.getLogger(SparkStreamingApp.class);
@@ -404,24 +401,12 @@ public class SparkStreamingApp {
                     AlertEvent alert = new AlertEvent();
                     alert.setUser_id(userId);
                     alert.setEvent_time(eventTime);
-                    alert.setType(type);  // Здесь будет либо "Credit", либо "Deposit"
+                    alert.setType(type);
                     alert.setSum(sum);
                     alert.setAvg_check_5min(avg);
                     alert.setMessage(AnomalyType.BIGGER_THEN_AVG_CHECK.name());
                     out.add(alert);
                 }
-//                double avg = calculateAverage(avgEntries);
-//
-//                if ("Credit".equalsIgnoreCase(type) && avg > 0 && sum >= 3 * avg) {
-//                    AlertEvent alert = new AlertEvent();
-//                    alert.setUser_id(userId);
-//                    alert.setEvent_time(eventTime);
-//                    alert.setType(type);
-//                    alert.setSum(sum);
-//                    alert.setAvg_check_5min(avg);
-//                    alert.setMessage(AnomalyType.BIGGER_THEN_AVG_CHECK.name());
-//                    out.add(alert);
-//                }
 
                 if (isStructuringSmallTransactions(mEntries, sum, curr)) {
                     AlertEvent alert = new AlertEvent();
@@ -434,7 +419,6 @@ public class SparkStreamingApp {
                     out.add(alert);
                 }
 
-                // Проверка на EXCESSIVE_REVERSAL_PATTERN
                 if (isExcessiveReversalPattern(mEntries, type, sum, curr)) {
                     AlertEvent alert = new AlertEvent();
                     alert.setUser_id(userId);
@@ -622,8 +606,8 @@ public class SparkStreamingApp {
                 SegmentEvent ev = new SegmentEvent();
                 ev.setUser_id(userId);
                 ev.setSegment(segment);
-                ev.setR_minutes(rfmState.getRMinutes());      // ← лучше использовать геттер
-                ev.setF(rfmState.getFWindow());               // ← ИСПРАВЛЕНО (было rfmState.f)
+                ev.setR_minutes(rfmState.getRMinutes());
+                ev.setF(rfmState.getFWindow());
                 ev.setM(rfmState.getMWindow());
                 ev.setUpdated_at(eventTime);
                 out.add(ev);
@@ -682,12 +666,12 @@ public class SparkStreamingApp {
                 rfmState.setLastWallMs(Math.max(fromRedis.getLastWallMs(), fromSpark.getLastWallMs()));
                 rfmState.setFirstTs(mergeFirstTs(fromRedis.getFirstTs(), fromSpark.getFirstTs()));
 
-                // M_total берём максимальное из Redis и Spark
+
                 if (fromSpark.getMTotal() > fromRedis.getMTotal()) {
                     rfmState.setMTotal(fromSpark.getMTotal());
                 }
 
-                // F_total берём максимальное из Redis и Spark
+
                 if (fromSpark.getFTotal() > fromRedis.getFTotal()) {
                     rfmState.setFTotal(fromSpark.getFTotal());
                 }
@@ -760,7 +744,7 @@ public class SparkStreamingApp {
                 return state;
             }
 
-            String[] parts = stateStr.split("\\|", 7);  // ← увеличили до 7
+            String[] parts = stateStr.split("\\|", 7);
             if (parts.length < 6) {
                 return state;
             }
@@ -771,7 +755,7 @@ public class SparkStreamingApp {
                 state.setLastWallMs(Long.parseLong(parts[2]));
                 state.setMTotal(Double.parseDouble(parts[3]));
                 state.setMWindow(Double.parseDouble(parts[4]));
-                state.setFTotal(Long.parseLong(parts[5]));   // ← НОВОЕ
+                state.setFTotal(Long.parseLong(parts[5]));
                 if (parts.length >= 7) {
                     parseRFMEntries(parts[6], state);
                 }
@@ -863,7 +847,7 @@ public class SparkStreamingApp {
                 state.setFirstTs(curr);
             }
 
-            // ========== РАСЧЁТ R_MINUTES ==========
+            // РАСЧЁТ R_MINUTES
             double newRMinutes = state.rMinutes;
 
             if (state.lastTs == 0) {
@@ -886,7 +870,7 @@ public class SparkStreamingApp {
 
             state.rMinutes = newRMinutes;
 
-            // 5. Обновляем lastTs (ВСЕГДА)
+            // 5. Обновляем lastTs
             if (curr > state.lastTs || state.lastTs == 0) {
                 state.lastTs = curr;
             }
@@ -980,10 +964,10 @@ public class SparkStreamingApp {
                 return "Новичок";
             }
             // ← ВАЖНО: используем M_TOTAL и F_TOTAL для сегментации!
-            else if (state.getMTotal() > 10000 && state.getFTotal() > 5) {
+            else if (state.getMTotal() > 500000 && state.getFTotal() > 30) {
                 return "VIP";
             }
-            else if (state.getMTotal() > 1000 && state.getFTotal() > 1) {
+            else if (state.getMTotal() > 20000 && state.getFTotal() > 10) {
                 return "Активный";
             }
             else if (state.getRMinutes() > SLEEPING_R_MINUTES) {
@@ -1059,18 +1043,17 @@ public class SparkStreamingApp {
         private long lastTs;
         @JsonProperty("firstTs")
         private long firstTs;
-        /** Время последней обработки на JVM; если event_time не меняется — R считаем по нему. */
         @JsonProperty("lastWallMs")
         private long lastWallMs;
         @JsonProperty("entries")
         private List<TransactionEntry> entries = new ArrayList<>();
-        @JsonProperty("fWindow")        // ← переименовали, теперь это оконное F
+        @JsonProperty("fWindow")
         private long fWindow;
-        @JsonProperty("fTotal")         // ← НОВОЕ поле! Накопительная частота
+        @JsonProperty("fTotal")
         private long fTotal;
         @JsonProperty("mWindow")
         private double mWindow;
-        @JsonProperty("mTotal")       // ← НОВОЕ поле! Баланс за всё время
+        @JsonProperty("mTotal")
         private double mTotal;
         @JsonProperty("rMinutes")
         private double rMinutes;
