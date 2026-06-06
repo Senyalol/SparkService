@@ -3,6 +3,7 @@ package spark;
 import org.apache.spark.api.java.function.FlatMapGroupsWithStateFunction;
 import org.apache.spark.api.java.function.MapFunction;
 import org.apache.spark.sql.*;
+import org.apache.spark.sql.sources.In;
 import org.apache.spark.sql.streaming.GroupState;
 import org.apache.spark.sql.streaming.GroupStateTimeout;
 import org.apache.spark.sql.streaming.OutputMode;
@@ -29,24 +30,23 @@ import java.util.concurrent.TimeoutException;
 public class SparkStreamingApp {
 
     private static final Logger log = LoggerFactory.getLogger(SparkStreamingApp.class);
-    private static final long WINDOW_ANOMALY_MS = TimeUnit.MINUTES.toMillis(5);
-    private static final long WINDOW_RFM_MS = TimeUnit.MINUTES.toMillis(5);
-    private static final double NEWCOMER_HOURS = 5.0 / 60.0; // 5 минут
-    //private static final double NEWCOMER_HOURS = 0.5 / 60.0; // 30 секунд
-    private static final double SLEEPING_R_MINUTES = 5; //30;
+    private static final long WINDOW_ANOMALY_MS = TimeUnit.MINUTES.toMillis(Long.parseLong(System.getenv("WINDOW_ANOMALY_MS")));
+    private static final long WINDOW_RFM_MS = TimeUnit.MINUTES.toMillis(Long.parseLong(System.getenv("WINDOW_RFM_MS")));
+    private static final double NEWCOMER_HOURS = Double.parseDouble(System.getenv("NEWCOMER_HOURS"));
+    private static final double SLEEPING_R_MINUTES = Double.parseDouble(System.getenv("SLEEPING_R_MINUTES"));
     private static final String ANOMALY_STATE_SEP = "||";
 
     //Anomaly
-    private static final long STRUCTURING_WINDOW_MS = TimeUnit.MINUTES.toMillis(10);
-    private static final double SMALL_TRANSACTION_THRESHOLD = 500.0;
-    private static final int MIN_STRUCTURING_COUNT = 10;
-    private static final double MIN_STRUCTURING_TOTAL = 3000.0;          // Минимальная общая сумма
+    private static final long STRUCTURING_WINDOW_MS = TimeUnit.MINUTES.toMillis(Long.parseLong(System.getenv("STRUCTURING_WINDOW_MS")));
+    private static final double SMALL_TRANSACTION_THRESHOLD = Double.parseDouble(System.getenv("SMALL_TRANSACTION_THRESHOLD"));
+    private static final int MIN_STRUCTURING_COUNT = Integer.parseInt(System.getenv("MIN_STRUCTURING_COUNT"));
+    private static final double MIN_STRUCTURING_TOTAL = Double.parseDouble(System.getenv("MIN_STRUCTURING_TOTAL"));          // Минимальная общая сумма
 
     // Параметры для EXCESSIVE_REVERSAL_PATTERN
-    private static final long REVERSAL_WINDOW_MS = TimeUnit.MINUTES.toMillis(5);     // Окно 5 минут
-    private static final double REVERSAL_THRESHOLD = 0.9;                              // Кредит >= 90% от депозита
-    private static final long MAX_TIME_BETWEEN_MS = TimeUnit.MINUTES.toMillis(1);     // Максимум 1 минута между операциями
-    private static final int MIN_REVERSAL_COUNT = 2;                                   // Минимум 2 таких паттерна
+    private static final long REVERSAL_WINDOW_MS = TimeUnit.MINUTES.toMillis(Long.parseLong(System.getenv("REVERSAL_WINDOW_MS")));     // Окно 5 минут
+    private static final double REVERSAL_THRESHOLD = Double.parseDouble(System.getenv("REVERSAL_THRESHOLD"));                              // Кредит >= 90% от депозита
+    private static final long MAX_TIME_BETWEEN_MS = TimeUnit.MINUTES.toMillis(Long.parseLong(System.getenv("MAX_TIME_BETWEEN_MS")));     // Максимум 1 минута между операциями
+    private static final int MIN_REVERSAL_COUNT = Integer.parseInt(System.getenv("MIN_REVERSAL_COUNT"));                                   // Минимум 2 таких паттерна
 
     private static final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())

@@ -30,6 +30,18 @@ services:
       SPARK_MASTER: local[*]
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      WINDOW_ANOMALY_MS: 60 #Расчет окна аномалий
+      WINDOW_RFM_MS: 60 #Окно для RFM
+      NEWCOMER_HOURS: 2 # Определяет, кого считать "Новичком"
+      SLEEPING_R_MINUTES: 30 # Если в течении этого времени нет транзакций - сегмент "спящий"
+      STRUCTURING_WINDOW_MS: 30 #Окно для поиска "структурирования" - множества мелких транзакций
+      SMALL_TRANSACTION_THRESHOLD: 1000.0 #Порог "маленькой" транзакции для аномалии
+      MIN_STRUCTURING_COUNT: 15 # Минимальное количество маленьких транзакций для срабатывания
+      MIN_STRUCTURING_TOTAL: 5000.0 #Минимальная общая сумма маленьких транзакций
+      REVERSAL_WINDOW_MS: 60 #Временное окно для поиска паттерна "депозит → кредит"
+      REVERSAL_THRESHOLD: 0.85 #Кредит должен составлять не менее 90% от суммы депозита
+      MAX_TIME_BETWEEN_MS: 5 #Максимальное время между депозитом и следующим кредитом
+      MIN_REVERSAL_COUNT: 3 #Минимальное количество найденных паттернов для срабатывания
     networks:
       - app-network
     depends_on:
