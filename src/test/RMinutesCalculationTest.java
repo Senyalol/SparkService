@@ -4,19 +4,19 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import spark.SparkStreamingApp;
+import spark.RFMState;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("R Minutes Calculation Tests")
 class RMinutesCalculationTest {
 
-    private SparkStreamingApp.RFMState state;
+    private RFMState state;
     private long now;
 
     @BeforeEach
     void setUp() {
-        state = new SparkStreamingApp.RFMState();
+        state = new RFMState();
         now = System.currentTimeMillis();
     }
 
@@ -156,7 +156,7 @@ class RMinutesCalculationTest {
     }
 
     // Helper method for testing RMinutes logic
-    private double calculateRMinutes(SparkStreamingApp.RFMState state, long curr, long lastTs) {
+    private double calculateRMinutes(RFMState state, long curr, long lastTs) {
         if (lastTs == 0) {
             return 0;
         }

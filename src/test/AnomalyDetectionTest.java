@@ -1,18 +1,20 @@
 package test;
 
 import org.junit.jupiter.api.*;
-import spark.SparkStreamingApp;
+import spark.RFMState;
+import spark.TransactionEntry;
+
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("Anomaly Detection Tests")
 class AnomalyDetectionTest {
 
-    private SparkStreamingApp.RFMState state;
+    private RFMState state;
 
     @BeforeEach
     void setUp() {
-        state = new SparkStreamingApp.RFMState();
+        state = new RFMState();
     }
 
     @Nested
@@ -23,9 +25,9 @@ class AnomalyDetectionTest {
         @DisplayName("Should detect when sum >= 3 * average")
         void shouldDetectLargeTransaction() {
             // Добавляем транзакции для среднего чека ~100
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(1000L, 100.0, "Deposit"));
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(2000L, 100.0, "Deposit"));
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(3000L, 100.0, "Deposit"));
+            state.getEntries().add(new TransactionEntry(1000L, 100.0, "Deposit"));
+            state.getEntries().add(new TransactionEntry(2000L, 100.0, "Deposit"));
+            state.getEntries().add(new TransactionEntry(3000L, 100.0, "Deposit"));
 
             double avg = calculateAverage(state.getEntries());
             double sum = 350.0; // >= 3 * avg (300)
@@ -36,7 +38,7 @@ class AnomalyDetectionTest {
         @Test
         @DisplayName("Should NOT detect when sum < 3 * average")
         void shouldNotDetectNormalTransaction() {
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(1000L, 100.0, "Deposit"));
+            state.getEntries().add(new TransactionEntry(1000L, 100.0, "Deposit"));
 
             double avg = calculateAverage(state.getEntries());
             double sum = 250.0; // < 3 * avg (300)
@@ -55,7 +57,7 @@ class AnomalyDetectionTest {
             long now = System.currentTimeMillis();
             // Добавляем 9 маленьких транзакций
             for (int i = 0; i < 9; i++) {
-                state.getEntries().add(new SparkStreamingApp.TransactionEntry(
+                state.getEntries().add(new TransactionEntry(
                         now - 10000 * i, 450.0, "Deposit"));
             }
 
@@ -69,12 +71,12 @@ class AnomalyDetectionTest {
         }
     }
 
-    private double calculateAverage(List<SparkStreamingApp.TransactionEntry> entries) {
-        return entries.stream().mapToDouble(SparkStreamingApp.TransactionEntry::getSum).average().orElse(0);
+    private double calculateAverage(List<TransactionEntry> entries) {
+        return entries.stream().mapToDouble(TransactionEntry::getSum).average().orElse(0);
     }
 
     private boolean checkStructuringCondition(
-            List<SparkStreamingApp.TransactionEntry> entries,
+            List<TransactionEntry> entries,
             double currentSum,
             long currentTime) {
         long smallCount = entries.stream()
@@ -82,7 +84,7 @@ class AnomalyDetectionTest {
                 .count();
         double smallTotal = entries.stream()
                 .filter(e -> e.getSum() <= 500.0)
-                .mapToDouble(SparkStreamingApp.TransactionEntry::getSum)
+                .mapToDouble(TransactionEntry::getSum)
                 .sum();
 
         if (currentSum <= 500.0) {
@@ -97,11 +99,11 @@ class AnomalyDetectionTest {
 @DisplayName("RFM Segmentation Logic Tests")
 class RFMSegmentationLogicTest {
 
-    private SparkStreamingApp.RFMState state;
+    private RFMState state;
 
     @BeforeEach
     void setUp() {
-        state = new SparkStreamingApp.RFMState();
+        state = new RFMState();
         state.setFirstTs(System.currentTimeMillis() - 3600000); // 1 hour ago (not newcomer)
     }
 
@@ -173,7 +175,7 @@ class RFMSegmentationLogicTest {
         assertEquals("Стандартный", segment, "Should be Standard when rMinutes == 30");
     }
 
-    private String calculateSegment(SparkStreamingApp.RFMState state, long currentTime) {
+    private String calculateSegment(RFMState state, long currentTime) {
         double firstHoursAgo = (currentTime - state.getFirstTs()) / 3600000.0;
 
         if (firstHoursAgo < 5.0/60.0) {

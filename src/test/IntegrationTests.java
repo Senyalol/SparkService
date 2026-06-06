@@ -1,9 +1,13 @@
 package test;
 
 import org.junit.jupiter.api.*;
-import spark.SparkStreamingApp;
+import spark.RFMState;
+import spark.TransactionEntry;
+
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static spark.AnomalyDetectionFunction.purgeWindow;
+import static spark.AnomalyDetectionFunction.segmentBalanceFromEntries;
 
 @DisplayName("Integration Tests")
 class IntegrationTests {
@@ -16,7 +20,7 @@ class IntegrationTests {
         @DisplayName("Should serialize and deserialize RFMState correctly")
         void shouldSerializeDeserializeRFMState() {
             // Create original state
-            SparkStreamingApp.RFMState original = new SparkStreamingApp.RFMState();
+            RFMState original = new RFMState();
             original.setLastTs(1234567890L);
             original.setFirstTs(1234567000L);
             original.setLastWallMs(1234567890L);
@@ -26,8 +30,8 @@ class IntegrationTests {
             original.setFWindow(10L);
             original.setRMinutes(15.5);
 
-            original.getEntries().add(new SparkStreamingApp.TransactionEntry(1000L, 100.0, "Deposit"));
-            original.getEntries().add(new SparkStreamingApp.TransactionEntry(2000L, 50.0, "Credit"));
+            original.getEntries().add(new TransactionEntry(1000L, 100.0, "Deposit"));
+            original.getEntries().add(new TransactionEntry(2000L, 50.0, "Credit"));
 
             // Serialize to string format
             String serialized = serializeRFMState(original);
@@ -35,7 +39,7 @@ class IntegrationTests {
             System.out.println("Serialized: " + serialized);
 
             // Deserialize
-            SparkStreamingApp.RFMState deserialized = deserializeRFMState(serialized);
+            RFMState deserialized = deserializeRFMState(serialized);
 
             // Verify all fields
             assertEquals(original.getLastTs(), deserialized.getLastTs());
@@ -52,10 +56,10 @@ class IntegrationTests {
         @Test
         @DisplayName("Should handle empty state serialization")
         void shouldHandleEmptyStateSerialization() {
-            SparkStreamingApp.RFMState empty = new SparkStreamingApp.RFMState();
+            RFMState empty = new RFMState();
 
             String serialized = serializeRFMState(empty);
-            SparkStreamingApp.RFMState deserialized = deserializeRFMState(serialized);
+            RFMState deserialized = deserializeRFMState(serialized);
 
             assertEquals(0, deserialized.getEntries().size());
             assertEquals(0, deserialized.getMTotal(), 0.001);
@@ -63,7 +67,7 @@ class IntegrationTests {
             assertEquals(0, deserialized.getRMinutes(), 0.001);
         }
 
-        private String serializeRFMState(SparkStreamingApp.RFMState state) {
+        private String serializeRFMState(RFMState state) {
             StringBuilder sb = new StringBuilder();
             // Добавляем ВСЕ поля, включая rMinutes!
             sb.append(state.getLastTs()).append("|")
@@ -77,14 +81,14 @@ class IntegrationTests {
 
             for (int i = 0; i < state.getEntries().size(); i++) {
                 if (i > 0) sb.append(",");
-                SparkStreamingApp.TransactionEntry e = state.getEntries().get(i);
+                TransactionEntry e = state.getEntries().get(i);
                 sb.append(e.getTimestamp()).append(":").append(e.getSum()).append(":").append(e.getType());
             }
             return sb.toString();
         }
 
-        private SparkStreamingApp.RFMState deserializeRFMState(String stateStr) {
-            SparkStreamingApp.RFMState state = new SparkStreamingApp.RFMState();
+        private RFMState deserializeRFMState(String stateStr) {
+            RFMState state = new RFMState();
             if (stateStr == null || stateStr.isEmpty()) return state;
 
             // Увеличиваем до 9 частей (было 7)
@@ -106,7 +110,7 @@ class IntegrationTests {
                         String[] p = e.split(":");
                         if (p.length >= 3) {
                             try {
-                                state.getEntries().add(new SparkStreamingApp.TransactionEntry(
+                                state.getEntries().add(new TransactionEntry(
                                         Long.parseLong(p[0]),
                                         Double.parseDouble(p[1]),
                                         p[2]
@@ -129,17 +133,17 @@ class IntegrationTests {
         @Test
         @DisplayName("Should process multiple users independently")
         void shouldProcessMultipleUsersIndependently() {
-            Map<Integer, SparkStreamingApp.RFMState> userStates = new HashMap<>();
+            Map<Integer, RFMState> userStates = new HashMap<>();
 
             // User 1: VIP trajectory
-            SparkStreamingApp.RFMState user1 = new SparkStreamingApp.RFMState();
+            RFMState user1 = new RFMState();
             processTransaction(user1, System.currentTimeMillis(), 10000.0, "Deposit");
             processTransaction(user1, System.currentTimeMillis() + 1000, 5000.0, "Deposit");
             processTransaction(user1, System.currentTimeMillis() + 2000, 100.0, "Credit");
             userStates.put(1, user1);
 
             // User 2: Standard user
-            SparkStreamingApp.RFMState user2 = new SparkStreamingApp.RFMState();
+            RFMState user2 = new RFMState();
             processTransaction(user2, System.currentTimeMillis(), 100.0, "Deposit");
             processTransaction(user2, System.currentTimeMillis() + 1000, 50.0, "Credit");
             userStates.put(2, user2);
@@ -156,7 +160,7 @@ class IntegrationTests {
         @Test
         @DisplayName("Should handle time window correctly across multiple transactions")
         void shouldHandleTimeWindowCorrectly() {
-            SparkStreamingApp.RFMState state = new SparkStreamingApp.RFMState();
+            RFMState state = new RFMState();
             long now = System.currentTimeMillis();
 
             // Add transactions over time
@@ -165,17 +169,17 @@ class IntegrationTests {
             processTransaction(state, now - 60000, 200.0, "Credit");     // 1 min ago (inside window)
 
             // Purge old transactions
-            SparkStreamingApp.purgeWindow(state.getEntries(), now, 300000);
+            purgeWindow(state.getEntries(), now, 300000);
 
             assertEquals(2, state.getEntries().size()); // Should keep only recent 2
-            double mWindow = SparkStreamingApp.segmentBalanceFromEntries(state.getEntries());
+            double mWindow = segmentBalanceFromEntries(state.getEntries());
             assertEquals(300.0, mWindow, 0.001); // 500 - 200 = 300
         }
 
         @Test
         @DisplayName("Should correctly calculate RMinutes from event times")
         void shouldCalculateRMinutesCorrectly() {
-            SparkStreamingApp.RFMState state = new SparkStreamingApp.RFMState();
+            RFMState state = new RFMState();
             long now = System.currentTimeMillis();
 
             // First transaction
@@ -191,7 +195,7 @@ class IntegrationTests {
             assertEquals(1.5, state.getRMinutes(), 0.1);
         }
 
-        private void processTransaction(SparkStreamingApp.RFMState state, long timestamp, double sum, String type) {
+        private void processTransaction(RFMState state, long timestamp, double sum, String type) {
             if (state.getFirstTs() == 0) {
                 state.setFirstTs(timestamp);
             }
@@ -203,10 +207,10 @@ class IntegrationTests {
             }
             state.setFTotal(state.getFTotal() + 1);
             state.setLastTs(timestamp);
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(timestamp, sum, type));
+            state.getEntries().add(new TransactionEntry(timestamp, sum, type));
         }
 
-        private double calculateRMinutes(SparkStreamingApp.RFMState state, long curr, long lastTs) {
+        private double calculateRMinutes(RFMState state, long curr, long lastTs) {
             if (lastTs == 0) return 0;
             long deltaEvent = curr - lastTs;
             if (deltaEvent > 0) {
@@ -226,7 +230,7 @@ class IntegrationTests {
         @Test
         @DisplayName("Should handle very large time gaps")
         void shouldHandleLargeTimeGaps() {
-            SparkStreamingApp.RFMState state = new SparkStreamingApp.RFMState();
+            RFMState state = new RFMState();
 
             // First transaction
             processTransaction(state, 1000L, 1000.0, "Deposit");
@@ -245,7 +249,7 @@ class IntegrationTests {
         @Test
         @DisplayName("Should handle malformed transaction types gracefully")
         void shouldHandleMalformedTypes() {
-            SparkStreamingApp.RFMState state = new SparkStreamingApp.RFMState();
+            RFMState state = new RFMState();
 
             // Unknown transaction type should be ignored
             double beforeMTotal = state.getMTotal();
@@ -260,19 +264,19 @@ class IntegrationTests {
         @Test
         @DisplayName("Should handle null or missing fields")
         void shouldHandleNullFields() {
-            SparkStreamingApp.TransactionEntry entry = new SparkStreamingApp.TransactionEntry();
+            TransactionEntry entry = new TransactionEntry();
             entry.setTimestamp(System.currentTimeMillis());
             entry.setSum(100.0);
             entry.setType(null);
 
-            double balance = SparkStreamingApp.segmentBalanceFromEntries(List.of(entry));
+            double balance = segmentBalanceFromEntries(List.of(entry));
             assertEquals(0.0, balance, 0.001, "Null type should be ignored");
         }
 
         @Test
         @DisplayName("Should handle concurrent-like sequence of transactions")
         void shouldHandleConcurrentTransactions() {
-            SparkStreamingApp.RFMState state = new SparkStreamingApp.RFMState();
+            RFMState state = new RFMState();
             long now = System.currentTimeMillis();
 
             // Multiple transactions with same timestamp (possible from batch)
@@ -285,7 +289,7 @@ class IntegrationTests {
             assertEquals(3, state.getFTotal());
         }
 
-        private void processTransaction(SparkStreamingApp.RFMState state, long timestamp, double sum, String type) {
+        private void processTransaction(RFMState state, long timestamp, double sum, String type) {
             if (state.getFirstTs() == 0 && timestamp > 0) {
                 state.setFirstTs(timestamp);
             }
@@ -301,7 +305,7 @@ class IntegrationTests {
             }
         }
 
-        private double calculateRMinutes(SparkStreamingApp.RFMState state, long curr, long lastTs) {
+        private double calculateRMinutes(RFMState state, long curr, long lastTs) {
             if (lastTs == 0) return 0;
             long deltaEvent = curr - lastTs;
             return deltaEvent > 0 ? deltaEvent / 60000.0 : 0;
@@ -315,12 +319,12 @@ class PerformanceTests {
     @Test
     @DisplayName("Should handle large number of entries in window")
     void shouldHandleLargeNumberOfEntries() {
-        SparkStreamingApp.RFMState state = new SparkStreamingApp.RFMState();
+        RFMState state = new RFMState();
         long now = System.currentTimeMillis();
 
         // Add 1000 transactions
         for (int i = 0; i < 1000; i++) {
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(
+            state.getEntries().add(new TransactionEntry(
                     now - (i * 1000),
                     Math.random() * 1000,
                     i % 2 == 0 ? "Deposit" : "Credit"
@@ -328,8 +332,8 @@ class PerformanceTests {
         }
 
         long startTime = System.nanoTime();
-        SparkStreamingApp.purgeWindow(state.getEntries(), now, 300000);
-        double balance = SparkStreamingApp.segmentBalanceFromEntries(state.getEntries());
+        purgeWindow(state.getEntries(), now, 300000);
+        double balance = segmentBalanceFromEntries(state.getEntries());
         long endTime = System.nanoTime();
 
         long durationMs = (endTime - startTime) / 1_000_000;

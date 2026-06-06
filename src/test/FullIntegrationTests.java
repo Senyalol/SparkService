@@ -1,21 +1,24 @@
 package test;
 
 import org.junit.jupiter.api.*;
-import spark.SparkStreamingApp;
+import spark.RFMState;
+import spark.TransactionEntry;
 
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static spark.AnomalyDetectionFunction.isNegativeMCredit;
+import static spark.AnomalyDetectionFunction.segmentBalanceFromEntries;
 
 @DisplayName("Full Integration Tests (Without External Dependencies)")
 class FullIntegrationTests {
 
-    private SparkStreamingApp.RFMState state;
+    private RFMState state;
     private long now;
 
     @BeforeEach
     void setUp() {
-        state = new SparkStreamingApp.RFMState();
+        state = new RFMState();
         now = System.currentTimeMillis();
     }
 
@@ -143,13 +146,13 @@ class FullIntegrationTests {
         @Test
         @DisplayName("NEGATIVE_M anomaly detection")
         void testNegativeMAnomaly() {
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now - 60000, 100.0, "Deposit"));
-            double currentM = SparkStreamingApp.segmentBalanceFromEntries(state.getEntries());
+            state.getEntries().add(new TransactionEntry(now - 60000, 100.0, "Deposit"));
+            double currentM = segmentBalanceFromEntries(state.getEntries());
 
-            boolean isNegative = SparkStreamingApp.isNegativeMCredit(currentM, "Credit", 150.0);
+            boolean isNegative = isNegativeMCredit(currentM, "Credit", 150.0);
             assertTrue(isNegative);
 
-            boolean isNotNegative = SparkStreamingApp.isNegativeMCredit(currentM, "Credit", 50.0);
+            boolean isNotNegative = isNegativeMCredit(currentM, "Credit", 50.0);
             assertFalse(isNotNegative);
         }
 
@@ -157,7 +160,7 @@ class FullIntegrationTests {
         @DisplayName("BIGGER_THEN_AVG_CHECK anomaly detection")
         void testBiggerThenAvgCheck() {
             for (int i = 0; i < 5; i++) {
-                state.getEntries().add(new SparkStreamingApp.TransactionEntry(
+                state.getEntries().add(new TransactionEntry(
                         now - (i * 10000), 100.0, "Deposit"));
             }
 
@@ -172,7 +175,7 @@ class FullIntegrationTests {
         @DisplayName("STRUCTURING_SMALL_TRANSACTIONS detection")
         void testStructuringDetection() {
             for (int i = 0; i < 9; i++) {
-                state.getEntries().add(new SparkStreamingApp.TransactionEntry(
+                state.getEntries().add(new TransactionEntry(
                         now - (i * 10000), 450.0, "Deposit"));
             }
 
@@ -184,7 +187,7 @@ class FullIntegrationTests {
         @DisplayName("STRUCTURING_SMALL_TRANSACTIONS not detected with 9 transactions")
         void testNoStructuringWith9Transactions() {
             for (int i = 0; i < 8; i++) {
-                state.getEntries().add(new SparkStreamingApp.TransactionEntry(
+                state.getEntries().add(new TransactionEntry(
                         now - (i * 10000), 450.0, "Deposit"));
             }
 
@@ -197,9 +200,9 @@ class FullIntegrationTests {
         void testExcessiveReversalPattern() {
             long creditTime = now;
 
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(
+            state.getEntries().add(new TransactionEntry(
                     creditTime - 45000, 1000.0, "Deposit"));
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(
+            state.getEntries().add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
 
             boolean result = checkReversalPattern(state.getEntries(), "Credit", 900.0, creditTime);
@@ -211,7 +214,7 @@ class FullIntegrationTests {
         void testNoReversalWith1Deposit() {
             long creditTime = now;
 
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(
+            state.getEntries().add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
 
             boolean result = checkReversalPattern(state.getEntries(), "Credit", 900.0, creditTime);
@@ -225,7 +228,7 @@ class FullIntegrationTests {
 
     // ========== HELPER METHODS ==========
 
-    private void processTransaction(SparkStreamingApp.RFMState state, long timestamp, double sum, String type) {
+    private void processTransaction(RFMState state, long timestamp, double sum, String type) {
         if (state.getFirstTs() == 0) {
             state.setFirstTs(timestamp);
         }
@@ -237,15 +240,15 @@ class FullIntegrationTests {
         }
         state.setFTotal(state.getFTotal() + 1);
         state.setLastTs(timestamp);
-        state.getEntries().add(new SparkStreamingApp.TransactionEntry(timestamp, sum, type));
+        state.getEntries().add(new TransactionEntry(timestamp, sum, type));
     }
 
-    private void assertSegment(String expected, long currentTime, SparkStreamingApp.RFMState state) {
+    private void assertSegment(String expected, long currentTime, RFMState state) {
         String segment = calculateSegment(state, currentTime);
         assertEquals(expected, segment);
     }
 
-    private String calculateSegment(SparkStreamingApp.RFMState state, long currentTime) {
+    private String calculateSegment(RFMState state, long currentTime) {
         double firstHoursAgo = (currentTime - state.getFirstTs()) / 3600000.0;
 
         if (firstHoursAgo < 5.0/60.0) {
@@ -261,15 +264,15 @@ class FullIntegrationTests {
         }
     }
 
-    private double calculateAverage(List<SparkStreamingApp.TransactionEntry> entries) {
-        return entries.stream().mapToDouble(SparkStreamingApp.TransactionEntry::getSum).average().orElse(0);
+    private double calculateAverage(List<TransactionEntry> entries) {
+        return entries.stream().mapToDouble(TransactionEntry::getSum).average().orElse(0);
     }
 
-    private boolean checkStructuringCondition(List<SparkStreamingApp.TransactionEntry> entries,
+    private boolean checkStructuringCondition(List<TransactionEntry> entries,
                                               double currentSum, long currentTime) {
         long smallCount = entries.stream().filter(e -> e.getSum() <= 500.0).count();
         double smallTotal = entries.stream().filter(e -> e.getSum() <= 500.0)
-                .mapToDouble(SparkStreamingApp.TransactionEntry::getSum).sum();
+                .mapToDouble(TransactionEntry::getSum).sum();
 
         if (currentSum <= 500.0) {
             smallCount++;
@@ -279,12 +282,12 @@ class FullIntegrationTests {
         return smallCount >= 10 && smallTotal >= 3000.0;
     }
 
-    private boolean checkReversalPattern(List<SparkStreamingApp.TransactionEntry> entries,
+    private boolean checkReversalPattern(List<TransactionEntry> entries,
                                          String currentType, double currentSum, long currentTime) {
         if (!"Credit".equalsIgnoreCase(currentType)) return false;
 
         int reversalCount = 0;
-        for (SparkStreamingApp.TransactionEntry e : entries) {
+        for (TransactionEntry e : entries) {
             if ("Deposit".equalsIgnoreCase(e.getType())) {
                 if (currentTime - e.getTimestamp() <= 300000) {
                     boolean amountMatch = currentSum >= e.getSum() * 0.9;
@@ -296,7 +299,7 @@ class FullIntegrationTests {
         return reversalCount >= 2;
     }
 
-    private String serializeToCheckpoint(SparkStreamingApp.RFMState state) {
+    private String serializeToCheckpoint(RFMState state) {
         StringBuilder sb = new StringBuilder();
         sb.append(state.getFirstTs()).append("|")
                 .append(state.getMTotal()).append("|")
@@ -306,8 +309,8 @@ class FullIntegrationTests {
         return sb.toString();
     }
 
-    private SparkStreamingApp.RFMState deserializeFromCheckpoint(String data) {
-        SparkStreamingApp.RFMState state = new SparkStreamingApp.RFMState();
+    private RFMState deserializeFromCheckpoint(String data) {
+        RFMState state = new RFMState();
         String[] parts = data.split("\\|");
         if (parts.length >= 5) {
             state.setFirstTs(Long.parseLong(parts[0]));
@@ -319,7 +322,7 @@ class FullIntegrationTests {
         return state;
     }
 
-    private SparkStreamingApp.RFMState createUserState(int userId) {
-        return new SparkStreamingApp.RFMState();
+    private RFMState createUserState(int userId) {
+        return new RFMState();
     }
 }

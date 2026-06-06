@@ -1,18 +1,21 @@
 package test;
 
 import org.junit.jupiter.api.*;
-import spark.SparkStreamingApp;
+import spark.RFMState;
+import spark.TransactionEntry;
+
 import static org.junit.jupiter.api.Assertions.*;
+import static spark.AnomalyDetectionFunction.*;
 
 @DisplayName("RFM State Update Logic Tests")
 class RFMStateUpdateTest {
 
-    private SparkStreamingApp.RFMState state;
+    private RFMState state;
     private long now;
 
     @BeforeEach
     void setUp() {
-        state = new SparkStreamingApp.RFMState();
+        state = new RFMState();
         now = System.currentTimeMillis();
     }
 
@@ -83,11 +86,11 @@ class RFMStateUpdateTest {
             long now = System.currentTimeMillis();
 
             // Add transactions within window (last 5 minutes)
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now - 60000, 100.0, "Deposit"));
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now - 120000, 50.0, "Deposit"));
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now - 180000, 30.0, "Credit"));
+            state.getEntries().add(new TransactionEntry(now - 60000, 100.0, "Deposit"));
+            state.getEntries().add(new TransactionEntry(now - 120000, 50.0, "Deposit"));
+            state.getEntries().add(new TransactionEntry(now - 180000, 30.0, "Credit"));
 
-            double mWindow = SparkStreamingApp.segmentBalanceFromEntries(state.getEntries());
+            double mWindow = segmentBalanceFromEntries(state.getEntries());
             assertEquals(120.0, mWindow, 0.001); // 100 + 50 - 30 = 120
         }
 
@@ -97,13 +100,13 @@ class RFMStateUpdateTest {
             long now = System.currentTimeMillis();
 
             // Old transaction (10 minutes ago)
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now - 600000, 1000.0, "Deposit"));
+            state.getEntries().add(new TransactionEntry(now - 600000, 1000.0, "Deposit"));
             // Recent transaction
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now - 60000, 100.0, "Deposit"));
+            state.getEntries().add(new TransactionEntry(now - 60000, 100.0, "Deposit"));
 
-            SparkStreamingApp.purgeWindow(state.getEntries(), now, 300000); // 5 min window
+            purgeWindow(state.getEntries(), now, 300000); // 5 min window
 
-            double mWindow = SparkStreamingApp.segmentBalanceFromEntries(state.getEntries());
+            double mWindow = segmentBalanceFromEntries(state.getEntries());
             assertEquals(100.0, mWindow, 0.001); // Only recent transaction counts
             assertEquals(1, state.getEntries().size());
         }
@@ -113,11 +116,11 @@ class RFMStateUpdateTest {
         void shouldCalculateFWindowCorrectly() {
             long now = System.currentTimeMillis();
 
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now - 60000, 100.0, "Deposit"));
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now - 120000, 50.0, "Credit"));
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now - 600000, 1000.0, "Deposit")); // Old
+            state.getEntries().add(new TransactionEntry(now - 60000, 100.0, "Deposit"));
+            state.getEntries().add(new TransactionEntry(now - 120000, 50.0, "Credit"));
+            state.getEntries().add(new TransactionEntry(now - 600000, 1000.0, "Deposit")); // Old
 
-            SparkStreamingApp.purgeWindow(state.getEntries(), now, 300000);
+            purgeWindow(state.getEntries(), now, 300000);
 
             assertEquals(2, state.getEntries().size()); // Only recent 2 transactions
         }
@@ -131,11 +134,11 @@ class RFMStateUpdateTest {
         @DisplayName("Should reject credit when would cause negative M_window")
         void shouldRejectCreditCausingNegativeMWindow() {
             // Only 100 in window
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now, 100.0, "Deposit"));
-            double currentMWindow = SparkStreamingApp.segmentBalanceFromEntries(state.getEntries());
+            state.getEntries().add(new TransactionEntry(now, 100.0, "Deposit"));
+            double currentMWindow = segmentBalanceFromEntries(state.getEntries());
 
             // Try to credit 150
-            boolean isNegative = SparkStreamingApp.isNegativeMCredit(currentMWindow, "Credit", 150.0);
+            boolean isNegative = isNegativeMCredit(currentMWindow, "Credit", 150.0);
 
             assertTrue(isNegative, "Credit should be rejected");
         }
@@ -143,11 +146,11 @@ class RFMStateUpdateTest {
         @Test
         @DisplayName("Should accept credit when keeps M_window >= 0")
         void shouldAcceptCreditKeepingMWindowNonNegative() {
-            state.getEntries().add(new SparkStreamingApp.TransactionEntry(now, 100.0, "Deposit"));
-            double currentMWindow = SparkStreamingApp.segmentBalanceFromEntries(state.getEntries());
+            state.getEntries().add(new TransactionEntry(now, 100.0, "Deposit"));
+            double currentMWindow = segmentBalanceFromEntries(state.getEntries());
 
             // Credit 100 (exact amount)
-            boolean isNegative = SparkStreamingApp.isNegativeMCredit(currentMWindow, "Credit", 100.0);
+            boolean isNegative = isNegativeMCredit(currentMWindow, "Credit", 100.0);
 
             assertFalse(isNegative, "Credit equal to balance should be accepted");
         }
@@ -185,7 +188,7 @@ class RFMStateUpdateTest {
         }
     }
 
-    private void updateMTotal(SparkStreamingApp.RFMState state, double sum, String type) {
+    private void updateMTotal(RFMState state, double sum, String type) {
         double currentMTotal = state.getMTotal();
         if ("Deposit".equalsIgnoreCase(type)) {
             currentMTotal += sum;
@@ -195,7 +198,7 @@ class RFMStateUpdateTest {
         state.setMTotal(Math.max(0, currentMTotal));
     }
 
-    private void updateFTotal(SparkStreamingApp.RFMState state, String type) {
+    private void updateFTotal(RFMState state, String type) {
         state.setFTotal(state.getFTotal() + 1);
     }
 }
@@ -203,12 +206,12 @@ class RFMStateUpdateTest {
 @DisplayName("RFM Complete Workflow Tests")
 class RFMCompleteWorkflowTest {
 
-    private SparkStreamingApp.RFMState state;
+    private RFMState state;
     private long baseTime;
 
     @BeforeEach
     void setUp() {
-        state = new SparkStreamingApp.RFMState();
+        state = new RFMState();
         baseTime = System.currentTimeMillis();
         state.setFirstTs(baseTime - 3600000); // 1 hour ago
     }
@@ -292,7 +295,7 @@ class RFMCompleteWorkflowTest {
         assertEquals(3, state.getFTotal());
     }
 
-    private void updateState(SparkStreamingApp.RFMState state, long timestamp, double sum, String type) {
+    private void updateState(RFMState state, long timestamp, double sum, String type) {
         if (state.getFirstTs() == 0) {
             state.setFirstTs(timestamp);
         }
@@ -306,7 +309,7 @@ class RFMCompleteWorkflowTest {
         state.setLastTs(timestamp);
     }
 
-    private String getSegment(SparkStreamingApp.RFMState state) {
+    private String getSegment(RFMState state) {
         double firstHoursAgo = (System.currentTimeMillis() - state.getFirstTs()) / 3600000.0;
 
         if (firstHoursAgo < 5.0/60.0) {

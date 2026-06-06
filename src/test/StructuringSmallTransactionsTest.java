@@ -4,7 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import spark.SparkStreamingApp;
+import spark.TransactionEntry;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Structuring Small Transactions Tests")
 class StructuringSmallTransactionsTest {
 
-    private List<SparkStreamingApp.TransactionEntry> entries;
+    private List<TransactionEntry> entries;
     private long now;
 
     @BeforeEach
@@ -31,7 +31,7 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should detect structuring: 10+ small transactions >= 3000 total")
         void shouldDetectStructuringWith10Transactions() {
             for (int i = 0; i < 9; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 10000), 450.0, "Deposit"));
             }
 
@@ -44,7 +44,7 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should detect structuring with exactly 10 transactions")
         void shouldDetectWithExactly10Transactions() {
             for (int i = 0; i < 9; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 10000), 300.0, "Deposit"));
             }
 
@@ -57,7 +57,7 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should NOT detect with only 9 small transactions")
         void shouldNotDetectWith9Transactions() {
             for (int i = 0; i < 8; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 10000), 450.0, "Deposit"));
             }
 
@@ -70,7 +70,7 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should NOT detect when total amount < 3000")
         void shouldNotDetectWhenTotalLessThan3000() {
             for (int i = 0; i < 9; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 10000), 290.0, "Deposit"));
             }
 
@@ -83,7 +83,7 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should NOT detect when transactions are large (> 500)")
         void shouldNotDetectLargeTransactions() {
             for (int i = 0; i < 9; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 10000), 600.0, "Deposit"));
             }
 
@@ -101,11 +101,11 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should only count transactions within 10 minute window")
         void shouldOnlyCountTransactionsWithinWindow() {
             // Старая транзакция (15 минут назад) - НЕ должна учитываться
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     now - 900000, 450.0, "Deposit"));
 
             for (int i = 0; i < 9; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 30000), 450.0, "Deposit"));
             }
 
@@ -118,11 +118,11 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should include transactions exactly at window boundary (<=)")
         void shouldIncludeBoundaryTransactions() {
             // Транзакция ровно на границе окна (10 минут) - ДОЛЖНА учитываться
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     now - 600000, 450.0, "Deposit"));
 
             for (int i = 0; i < 8; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 30000), 450.0, "Deposit"));
             }
 
@@ -135,11 +135,11 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should exclude transactions just outside window (> 10 minutes)")
         void shouldExcludeTransactionsJustOutsideWindow() {
             // Транзакция чуть за границей окна (10 минут 1 секунда)
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     now - 600001, 450.0, "Deposit"));
 
             for (int i = 0; i < 8; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 30000), 450.0, "Deposit"));
             }
 
@@ -157,11 +157,11 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should count both Deposit and Credit as transactions")
         void shouldCountBothTypes() {
             for (int i = 0; i < 5; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 10000), 300.0, "Deposit"));
             }
             for (int i = 0; i < 4; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 10000), 300.0, "Credit"));
             }
 
@@ -174,7 +174,7 @@ class StructuringSmallTransactionsTest {
         @DisplayName("Should count transactions even with unknown types")
         void shouldCountUnknownTypes() {
             for (int i = 0; i < 9; i++) {
-                entries.add(new SparkStreamingApp.TransactionEntry(
+                entries.add(new TransactionEntry(
                         now - (i * 10000), 450.0, "Unknown"));
             }
 
@@ -186,7 +186,7 @@ class StructuringSmallTransactionsTest {
 
     // Вспомогательный метод, копирующий логику из SparkStreamingApp
     private boolean isStructuringSmallTransactions(
-            List<SparkStreamingApp.TransactionEntry> entries,
+            List<TransactionEntry> entries,
             double currentSum,
             long currentTime) {
 
@@ -197,7 +197,7 @@ class StructuringSmallTransactionsTest {
         int MIN_STRUCTURING_COUNT = 10;
         double MIN_STRUCTURING_TOTAL = 3000.0;
 
-        for (SparkStreamingApp.TransactionEntry e : entries) {
+        for (TransactionEntry e : entries) {
             if (currentTime - e.getTimestamp() <= STRUCTURING_WINDOW_MS) {
                 if (e.getSum() <= SMALL_TRANSACTION_THRESHOLD) {
                     smallCount++;
@@ -219,7 +219,7 @@ class StructuringSmallTransactionsTest {
 @DisplayName("Excessive Reversal Pattern Tests")
 class ExcessiveReversalPatternTest {
 
-    private List<SparkStreamingApp.TransactionEntry> entries;
+    private List<TransactionEntry> entries;
     private long now;
 
     @BeforeEach
@@ -237,9 +237,9 @@ class ExcessiveReversalPatternTest {
         void shouldDetectReversalPattern() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 900.0, "Deposit"));
 
             // Credit 900 qualifies with 1000? 900 >= 900? YES
@@ -255,9 +255,9 @@ class ExcessiveReversalPatternTest {
         void shouldDetectAtExactly90Percent() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -271,9 +271,9 @@ class ExcessiveReversalPatternTest {
         void shouldNotDetectWithOnlyOneDeposit() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 2000.0, "Deposit"));
 
             // Credit 950 qualifies with 1000? 950 >= 900? YES
@@ -289,9 +289,9 @@ class ExcessiveReversalPatternTest {
         void shouldNotDetectBelowThreshold() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -310,9 +310,9 @@ class ExcessiveReversalPatternTest {
         void shouldRequireDepositsWithin1Minute() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 55000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 45000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -326,9 +326,9 @@ class ExcessiveReversalPatternTest {
         void shouldNotDetectWhenDepositsTooOld() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 70000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 65000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -342,9 +342,9 @@ class ExcessiveReversalPatternTest {
         void shouldIgnoreOldDeposits() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 360000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 350000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -358,9 +358,9 @@ class ExcessiveReversalPatternTest {
         void shouldWorkWith30SecondsBefore() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 900.0, "Deposit"));
 
             // Credit must qualify with BOTH deposits
@@ -382,9 +382,9 @@ class ExcessiveReversalPatternTest {
         void shouldNotDetectForDeposit() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -398,9 +398,9 @@ class ExcessiveReversalPatternTest {
         void shouldBeCaseInsensitive() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 1000.0, "Deposit"));
 
             boolean resultLower = isExcessiveReversalPattern(
@@ -417,11 +417,11 @@ class ExcessiveReversalPatternTest {
         void shouldOnlyCountDepositTransactions() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Credit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 10000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -449,11 +449,11 @@ class ExcessiveReversalPatternTest {
         void shouldHandleNullTypeInEntries() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, null));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 10000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -467,9 +467,9 @@ class ExcessiveReversalPatternTest {
         void shouldHandleLargeSums() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1_000_000_000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 1_000_000_000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -483,9 +483,9 @@ class ExcessiveReversalPatternTest {
         void shouldHandleZeroSum() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 30000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -499,9 +499,9 @@ class ExcessiveReversalPatternTest {
         void testRealScenario() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 45000, 1000.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 15000, 1000.0, "Deposit"));
 
             boolean result = isExcessiveReversalPattern(
@@ -515,9 +515,9 @@ class ExcessiveReversalPatternTest {
         void testDifferentDepositAmounts() {
             long creditTime = now;
 
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 40000, 800.0, "Deposit"));
-            entries.add(new SparkStreamingApp.TransactionEntry(
+            entries.add(new TransactionEntry(
                     creditTime - 20000, 1000.0, "Deposit"));
 
             // For 800: need >= 720
@@ -531,7 +531,7 @@ class ExcessiveReversalPatternTest {
     }
 
     private boolean isExcessiveReversalPattern(
-            List<SparkStreamingApp.TransactionEntry> entries,
+            List<TransactionEntry> entries,
             String currentType,
             double currentSum,
             long currentTime) {
@@ -546,7 +546,7 @@ class ExcessiveReversalPatternTest {
         long MAX_TIME_BETWEEN_MS = 60000;
         int MIN_REVERSAL_COUNT = 2;
 
-        for (SparkStreamingApp.TransactionEntry e : entries) {
+        for (TransactionEntry e : entries) {
             if ("Deposit".equalsIgnoreCase(e.getType())) {
                 if (currentTime - e.getTimestamp() <= REVERSAL_WINDOW_MS) {
                     boolean amountMatch = currentSum >= e.getSum() * REVERSAL_THRESHOLD;

@@ -4,18 +4,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import spark.SparkStreamingApp;
+import spark.RFMState;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("RFMState Unit Tests")
 class RFMStateTest {
 
-    private SparkStreamingApp.RFMState state;
+    private RFMState state;
 
     @BeforeEach
     void setUp() {
-        state = new SparkStreamingApp.RFMState();
+        state = new RFMState();
     }
 
     @Nested
