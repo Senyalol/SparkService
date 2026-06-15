@@ -32,7 +32,7 @@ services:
       REDIS_PORT: 6379
       WINDOW_ANOMALY_MS: 60 #Расчет окна аномалий
       WINDOW_RFM_MS: 60 #Окно для RFM
-      NEWCOMER_HOURS: 2 # Определяет, кого считать "Новичком"
+      NEWCOMER_HOURS: 0.5 # Определяет, кого считать "Новичком"
       SLEEPING_R_MINUTES: 30 # Если в течении этого времени нет транзакций - сегмент "спящий"
       STRUCTURING_WINDOW_MS: 30 #Окно для поиска "структурирования" - множества мелких транзакций
       SMALL_TRANSACTION_THRESHOLD: 1000.0 #Порог "маленькой" транзакции для аномалии
