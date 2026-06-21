@@ -42,6 +42,9 @@ services:
       REVERSAL_THRESHOLD: 0.85 #Кредит должен составлять не менее 90% от суммы депозита
       MAX_TIME_BETWEEN_MS: 5 #Максимальное время между депозитом и следующим кредитом
       MIN_REVERSAL_COUNT: 3 #Минимальное количество найденных паттернов для срабатывания
+      FREQUENT_CREDIT_WINDOW_MS: 30      # Окно для частых списаний
+      LARGE_CREDIT_THRESHOLD: 10000.0   # Порог "крупной" транзакции
+      MIN_FREQUENT_CREDIT_COUNT: 5
     networks:
       - app-network
     depends_on:

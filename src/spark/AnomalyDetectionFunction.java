@@ -83,6 +83,18 @@ public class AnomalyDetectionFunction implements FlatMapGroupsWithStateFunction<
                 out.add(alert);
             }
 
+            // ===== АНОМАЛИЯ #3: BIGGEST_AND_FREQUENT_CREDIT (НОВАЯ) =====
+            if (isBiggestAndFrequentCredit(mEntries, type, sum, curr)) {
+                AlertEvent alert = new AlertEvent();
+                alert.setUser_id(userId);
+                alert.setEvent_time(eventTime);
+                alert.setType(type);
+                alert.setSum(sum);
+                alert.setAvg_check_5min(0);
+                alert.setMessage(AnomalyType.BIGGEST_AND_FREQUENT_CREDIT.name());
+                out.add(alert);
+            }
+
             if (isStructuringSmallTransactions(mEntries, sum, curr)) {
                 AlertEvent alert = new AlertEvent();
                 alert.setUser_id(userId);
@@ -294,6 +306,49 @@ public class AnomalyDetectionFunction implements FlatMapGroupsWithStateFunction<
 
         return smallCount >= MIN_STRUCTURING_COUNT &&
                 smallTotal >= MIN_STRUCTURING_TOTAL;
+    }
+
+
+    private static final long FREQUENT_CREDIT_WINDOW_MS = TimeUnit.MINUTES.toMillis(
+            Long.parseLong(System.getenv().getOrDefault("FREQUENT_CREDIT_WINDOW_MS", "30"))
+    );
+    private static final double LARGE_CREDIT_THRESHOLD = Double.parseDouble(
+            System.getenv().getOrDefault("LARGE_CREDIT_THRESHOLD", "100000.0")
+    );
+    private static final int MIN_FREQUENT_CREDIT_COUNT = Integer.parseInt(
+            System.getenv().getOrDefault("MIN_FREQUENT_CREDIT_COUNT", "3")
+    );
+
+    private static boolean isBiggestAndFrequentCredit(
+            List<TransactionEntry> entries,
+            String currentType,
+            double currentSum,
+            long currentTime
+    ) {
+        // Только Credit транзакции
+        if (!"Credit".equalsIgnoreCase(currentType)) {
+            return false;
+        }
+
+        // Проверяем, является ли текущая транзакция крупной
+        if (currentSum < LARGE_CREDIT_THRESHOLD) {
+            return false;
+        }
+
+        // Считаем количество крупных списаний в окне (включая текущую)
+        long largeCreditCount = 1;
+
+        for (TransactionEntry e : entries) {
+            if ("Credit".equalsIgnoreCase(e.getType())) {
+                if (e.getSum() >= LARGE_CREDIT_THRESHOLD) {
+                    if (currentTime - e.getTimestamp() <= FREQUENT_CREDIT_WINDOW_MS) {
+                        largeCreditCount++;
+                    }
+                }
+            }
+        }
+
+        return largeCreditCount >= MIN_FREQUENT_CREDIT_COUNT;
     }
 
 
