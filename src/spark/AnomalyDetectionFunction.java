@@ -25,7 +25,9 @@ public class AnomalyDetectionFunction implements FlatMapGroupsWithStateFunction<
     private static final int MIN_STRUCTURING_COUNT = Integer.parseInt(System.getenv("MIN_STRUCTURING_COUNT"));
     private static final double MIN_STRUCTURING_TOTAL = Double.parseDouble(System.getenv("MIN_STRUCTURING_TOTAL"));          // Минимальная общая сумма
     private static final long STRUCTURING_WINDOW_MS = TimeUnit.MINUTES.toMillis(Long.parseLong(System.getenv("STRUCTURING_WINDOW_MS")));
-
+    private static final long FREQUENT_CREDIT_WINDOW_MS = TimeUnit.MINUTES.toMillis(Long.parseLong(System.getenv("FREQUENT_CREDIT_WINDOW_MS")));
+    private static final double LARGE_CREDIT_THRESHOLD = Double.parseDouble(System.getenv("LARGE_CREDIT_THRESHOLD"));
+    private static final int MIN_FREQUENT_CREDIT_COUNT = Integer.parseInt(System.getenv("MIN_FREQUENT_CREDIT_COUNT"));
 
     @Override
     public Iterator<AlertEvent> call(Integer userId, Iterator<Row> rows, GroupState<String> state) throws Exception {
@@ -309,15 +311,15 @@ public class AnomalyDetectionFunction implements FlatMapGroupsWithStateFunction<
     }
 
 
-    private static final long FREQUENT_CREDIT_WINDOW_MS = TimeUnit.MINUTES.toMillis(
-            Long.parseLong(System.getenv().getOrDefault("FREQUENT_CREDIT_WINDOW_MS", "30"))
-    );
-    private static final double LARGE_CREDIT_THRESHOLD = Double.parseDouble(
-            System.getenv().getOrDefault("LARGE_CREDIT_THRESHOLD", "100000.0")
-    );
-    private static final int MIN_FREQUENT_CREDIT_COUNT = Integer.parseInt(
-            System.getenv().getOrDefault("MIN_FREQUENT_CREDIT_COUNT", "3")
-    );
+//    private static final long FREQUENT_CREDIT_WINDOW_MS = TimeUnit.MINUTES.toMillis(
+//            Long.parseLong(System.getenv().getOrDefault("FREQUENT_CREDIT_WINDOW_MS", "30"))
+//    );
+//    private static final double LARGE_CREDIT_THRESHOLD = Double.parseDouble(
+//            System.getenv().getOrDefault("LARGE_CREDIT_THRESHOLD", "100000.0")
+//    );
+//    private static final int MIN_FREQUENT_CREDIT_COUNT = Integer.parseInt(
+//            System.getenv().getOrDefault("MIN_FREQUENT_CREDIT_COUNT", "3")
+//    );
 
     private static boolean isBiggestAndFrequentCredit(
             List<TransactionEntry> entries,
